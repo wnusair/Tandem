@@ -138,6 +138,29 @@ def health():
     return jsonify({"status": "Alive"}), 200
 
 
+@nodes_bp.route("/me", methods=["GET"])
+def node_self_info():
+    """A node's own record, for `tandem status` to show hardware specs without
+    anyone having to reach into Redis directly. Uses the same node auth as
+    every other node route, and never includes the node_token itself."""
+    node_id, node, error = _require_node_auth()
+    if error:
+        return error
+    assert node is not None
+
+    info: dict[str, object] = {"node_id": node_id}
+    if node.get("cpu_name") is not None:
+        info["cpu_name"] = node["cpu_name"]
+    for field in ("cpu_cores", "cpu_mhz", "memory_mb"):
+        value = _maybe_int(node.get(field))
+        if value is not None:
+            info[field] = value
+    if node.get("last_seen") is not None:
+        info["last_seen"] = node["last_seen"]
+
+    return jsonify(info)
+
+
 @nodes_bp.route("/register", methods=["POST"])
 def register():
     owner, registration_error = _resolve_registration_identity()

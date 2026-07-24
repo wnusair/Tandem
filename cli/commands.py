@@ -42,6 +42,7 @@ from .node_service import (
     enable_service,
     get_status,
     is_registered,
+    load_identity,
     node_is_running,
     register_node_now,
     resolve_node_server_url,
@@ -1041,6 +1042,7 @@ def _print_node_status() -> None:
 
     if status.node_id:
         print(f"  Node ID:  {status.node_id}")
+        _print_node_specs(status)
     else:
         print("  Not registered yet -- it registers the first time you start it.")
 
@@ -1059,6 +1061,39 @@ def _print_node_status() -> None:
 
     if not status.node_id and load_auth_session() is None and not resolve_registration_token():
         print("  Not logged in. Run `tandem auth login`, then `tandem node start`.")
+
+
+def _print_node_specs(status) -> None:
+    """Ask the server for this node's hardware specs and print them.
+
+    Best effort: if the server can't be reached, or this node registered
+    before specs reporting existed, we just skip the lines instead of
+    failing `tandem status` over it.
+    """
+    identity = load_identity() or {}
+    node_token = identity.get("node_token")
+    if not status.server_url or not node_token:
+        return
+
+    from .remote import fetch_node_specs
+
+    try:
+        specs = fetch_node_specs(
+            server_url=status.server_url, node_id=status.node_id, node_token=node_token
+        )
+    except Exception:
+        return
+
+    cpu_name = specs.get("cpu_name")
+    if cpu_name:
+        cores = specs.get("cpu_cores")
+        mhz = specs.get("cpu_mhz")
+        extra = f" ({cores} cores @ {mhz} MHz)" if cores and mhz else ""
+        print(f"  CPU:      {cpu_name}{extra}")
+
+    memory_mb = specs.get("memory_mb")
+    if memory_mb:
+        print(f"  Memory:   {memory_mb:,} MB")
 
 
 def _cmd_status(_args: argparse.Namespace) -> int:

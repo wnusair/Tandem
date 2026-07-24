@@ -280,6 +280,30 @@ def fetch_usage(
     return payload
 
 
+def fetch_node_specs(
+    *, server_url: str, node_id: str, node_token: str
+) -> dict[str, Any]:
+    """Fetch this node's own record (hardware specs, last seen) from the server.
+
+    Unlike the rest of this module, this authenticates as the node itself
+    (X-Node-Id + its node_token) rather than with an account API key --
+    that's the same identity the tandem-node binary uses.
+    """
+    response = requests.get(
+        f"{server_url}/nodes/me",
+        headers={"X-Node-Id": node_id, "Authorization": f"Bearer {node_token}"},
+        timeout=_POLL_TIMEOUT_SECONDS,
+    )
+
+    if response.status_code != 200:
+        _raise_response_error(response)
+
+    payload = _response_payload(response)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Node info response was not valid JSON.")
+    return payload
+
+
 def serve_deploy(
     *,
     project_root: str,

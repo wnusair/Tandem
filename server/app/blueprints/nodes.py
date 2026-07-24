@@ -160,7 +160,7 @@ def register():
     if owner is not None:
         metrics["owner_user_id"] = str(owner.user_id)
 
-    for field in ("latency", "download", "upload"):
+    for field in ("latency", "download", "upload", "cpu_cores", "cpu_name", "cpu_mhz", "memory_mb"):
         value = data.get(field)
         if value is not None:
             metrics[field] = str(value)

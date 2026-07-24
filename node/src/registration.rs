@@ -1,10 +1,12 @@
 use std::env;
 use std::fs;
+use std::thread;
 
 use rand::rngs::OsRng;
 use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::RsaPrivateKey;
 use serde::{Deserialize, Serialize};
+use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
 const RSA_KEY_BITS: usize = 4096;
 
@@ -12,6 +14,44 @@ const RSA_KEY_BITS: usize = 4096;
 struct RegisterRequest {
     supports_wasm: bool,
     rsa_public_key_pem: String,
+    cpu_cores: usize,
+    cpu_name: String,
+    cpu_mhz: u64,
+    memory_mb: u64,
+}
+
+/// How many CPU cores this machine has, so the server can eventually make
+/// spec-aware scheduling decisions. Falls back to 1 if the OS won't tell us.
+fn cpu_cores() -> usize {
+    thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+/// The CPU's model name and clock speed (MHz), read off the first logical
+/// core -- on real hardware every core reports the same model, so one read
+/// is enough. Falls back to "unknown"/0 if the OS won't tell us.
+fn cpu_info() -> (String, u64) {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing().with_cpu(CpuRefreshKind::everything()),
+    );
+    sys.refresh_cpu_all();
+
+    match sys.cpus().first() {
+        // Real hardware often pads the brand string with trailing spaces
+        // (it comes straight from the CPUID instruction on x86), so trim it.
+        Some(cpu) => (cpu.brand().trim().to_string(), cpu.frequency()),
+        None => ("unknown".to_string(), 0),
+    }
+}
+
+/// Total system memory in megabytes. We only need the memory reading here, so
+/// we skip the heavier `System::new_all()` (which also scans processes, disks,
+/// etc.) and just refresh what we're after.
+fn memory_mb() -> u64 {
+    let mut sys = System::new();
+    sys.refresh_memory();
+    sys.total_memory() / 1024 / 1024
 }
 
 #[derive(Deserialize)]
@@ -54,9 +94,14 @@ pub async fn register_node(
         .to_public_key()
         .to_public_key_pem(LineEnding::LF)?;
 
+    let (cpu_name, cpu_mhz) = cpu_info();
     let body = RegisterRequest {
         supports_wasm: true,
         rsa_public_key_pem: pub_pem,
+        cpu_cores: cpu_cores(),
+        cpu_name,
+        cpu_mhz,
+        memory_mb: memory_mb(),
     };
 
     let client = reqwest::Client::builder()

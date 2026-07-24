@@ -62,13 +62,21 @@ tandem manifest [config_path]
 tandem build [config_path]
 tandem auth register --username <username>
 tandem auth login --username <username>
+tandem auth logout
+tandem auth status
 tandem settings show
 tandem settings set-server-url <url>
 tandem settings reset-server-url
+tandem settings set-registration-token <token>
+tandem settings reset-registration-token
 tandem sdk list
 tandem sdk install [name]
 tandem sdk download [name] --output <dir>
 tandem status
+tandem usage
+tandem serve [config_path]
+tandem serve list
+tandem serve stop <pid>
 tandem node start
 tandem node stop
 tandem node restart
@@ -251,7 +259,7 @@ tandem auth register --username demo --server-url http://127.0.0.1:6767
 tandem auth register --username demo --server-url http://127.0.0.1:6767
 ```
 
-The CLI prompts for your password securely, registers the user, authenticates, and stores `TANDEM_SERVER_URL` plus `TANDEM_API_KEY` in `.env`.
+The CLI prompts for your password securely, registers the user, authenticates, and stores your credentials in the OS keyring.
 
 To authenticate an existing user instead:
 
@@ -268,9 +276,9 @@ tandem auth login --username demo --rotate-api-key
 Security notes:
 
 - prefer the interactive password prompt over `--password`
-- the CLI never stores your password in `.env`
+- the CLI never stores your password or API key in `.env`
+- user credentials are saved securely in your operating system's password manager (keyring)
 - on POSIX systems it tightens `.env` permissions to owner read/write only
-- use `--no-store` if you do not want the API key written to disk
 
 ### 6. Build and run the sample project
 
@@ -283,7 +291,7 @@ tandem start cli/test.toml
 That command will:
 
 1. inspect the Python entry file,
-2. build the placeholder `.wasm` artifacts,
+2. build the `.wasm` artifacts,
 3. create a deployment if needed,
 4. upload the TOML + manifest + wasm files,
 5. wait for node execution,
@@ -308,10 +316,3 @@ tandem start cli/test.toml --no-wait
 ```
 
 That prints the `job_token`, status URL, and results URL.
-
-## Current runtime limitation
-
-The transport pipeline is live, but the current Python build backend still emits
-**placeholder WASM**. So a successful run proves the CLI → server → node → server
-path works, but it does not yet mean arbitrary Python logic has been lowered into
-real native WASM instructions.

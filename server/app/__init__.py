@@ -4,35 +4,10 @@ import secrets
 
 from dotenv import load_dotenv
 from flask import Flask
-from sqlalchemy import text
 
 from app.extensions import db, redis_client
 
 load_dotenv()
-
-
-def _apply_runtime_schema_migrations() -> None:
-    engine = db.engine
-    if engine.dialect.name != "postgresql":
-        return
-
-    statements = [
-        "ALTER TABLE users ALTER COLUMN username TYPE VARCHAR(64)",
-        "ALTER TABLE users ALTER COLUMN password TYPE VARCHAR(255)",
-        "ALTER TABLE user_api_rel ALTER COLUMN api_key TYPE VARCHAR(128)",
-        "ALTER TABLE deployments ALTER COLUMN api_key TYPE VARCHAR(128)",
-        "ALTER TABLE deployments ALTER COLUMN name TYPE VARCHAR(128)",
-    ]
-
-    with engine.begin() as connection:
-        for statement in statements:
-            connection.execute(text(statement))
-
-        connection.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username_unique ON users (username)"
-            )
-        )
 
 
 def _resolve_node_registration_token(server_dir: pathlib.Path) -> str:
@@ -106,6 +81,17 @@ def create_app():
     if task_storage_root:
         app.config["TASK_STORAGE_ROOT"] = task_storage_root
 
+    # Redundant execution: what share of tasks (0-100) get run on several nodes
+    # at once so their results can be compared. Off unless someone turns it on,
+    # since it multiplies the cost of every task it touches.
+    app.config["VERIFY_SAMPLE_PERCENT"] = os.environ.get(
+        "TANDEM_VERIFY_SAMPLE_PERCENT", 0
+    )
+    app.config["VERIFY_COPIES"] = os.environ.get("TANDEM_VERIFY_COPIES", 3)
+    app.config["VERIFY_TIMEOUT_SECONDS"] = os.environ.get(
+        "TANDEM_VERIFY_TIMEOUT_SECONDS", 300
+    )
+
     app.config["NODE_REGISTRATION_TOKEN"] = _resolve_node_registration_token(server_dir)
 
     redis_client.init_app(app)
@@ -118,7 +104,6 @@ def create_app():
         "JWT_PUBLIC_KEY_PATH", "keys/jwt_public.pem"
     )
 
-    from app.blueprints.api import api_bp
     from app.blueprints.auth import auth_bp
     from app.blueprints.deploy import deploy_bp
     from app.blueprints.desktop import desktop_bp
@@ -132,7 +117,6 @@ def create_app():
     app.register_blueprint(start_bp, url_prefix="/start")
     app.register_blueprint(deploy_bp, url_prefix="/deploy")
     app.register_blueprint(nodes_bp, url_prefix="/nodes")
-    app.register_blueprint(api_bp, url_prefix="/api/v1")
     app.register_blueprint(usage_bp, url_prefix="/api/v1")
     # Web hosting: /serve/deploy, /nodes/serve/*, and the public /app/<pid>/ LB.
     app.register_blueprint(serve_bp)
@@ -149,7 +133,6 @@ def create_app():
         db.init_app(app)
         try:
             db.create_all()
-            _apply_runtime_schema_migrations()
         except Exception as e:
             print("Warning: could not create database tables at startup:", e)
             # continue without stopping the app; DB may be unavailable locally

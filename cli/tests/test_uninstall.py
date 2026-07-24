@@ -28,7 +28,7 @@ class PerformUninstallTests(unittest.TestCase):
             with patch.object(node_paths, "NODE_HOME", root / "node"), \
                  patch.object(node_paths, "BIN_DIR", root / "bin"), \
                  patch.object(uninstall, "clear_auth_session"), \
-                 patch.object(uninstall, "_posix_launcher", return_value=posix_launcher), \
+                 patch.object(uninstall, "_posix_launchers", return_value=[posix_launcher]), \
                  patch.object(uninstall, "_windows_launcher", return_value=Path(tmp) / "tandem.bat"), \
                  patch.object(node_service, "active_backend", return_value="daemon"), \
                  patch.object(node_service, "stop_node", return_value=False):
@@ -48,7 +48,7 @@ class PerformUninstallTests(unittest.TestCase):
             with patch.object(node_paths, "NODE_HOME", root / "node"), \
                  patch.object(node_paths, "BIN_DIR", root / "bin"), \
                  patch.object(uninstall, "clear_auth_session"), \
-                 patch.object(uninstall, "_posix_launcher", return_value=Path(tmp) / "nope"), \
+                 patch.object(uninstall, "_posix_launchers", return_value=[Path(tmp) / "nope"]), \
                  patch.object(uninstall, "_windows_launcher", return_value=Path(tmp) / "nope.bat"), \
                  patch.object(uninstall, "_running_from", return_value=True), \
                  patch.object(uninstall, "_schedule_root_removal", scheduler), \

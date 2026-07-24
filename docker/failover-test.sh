@@ -28,10 +28,10 @@ $COMPOSE run -d --name "$HELPER" driver sleep infinity >/dev/null 2>&1
 
 echo ">>> deploying the web app across both nodes (replicas=2)"
 PID=$(docker exec "$HELPER" bash -c '
-curl -s -o /dev/null -X POST "$TANDEM_SERVER_URL/api/v1/register" \
+curl -s -o /dev/null -X POST "$TANDEM_SERVER_URL/api/v1/auth/register" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"failover-user\",\"password\":\"failoverpass123\"}" || true
-export TANDEM_API_KEY=$(curl -sf -X POST "$TANDEM_SERVER_URL/api/v1/login" \
+export TANDEM_API_KEY=$(curl -sf -X POST "$TANDEM_SERVER_URL/api/v1/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"failover-user\",\"password\":\"failoverpass123\"}" \
   | python3 -c "import sys, json; print(json.load(sys.stdin)[\"api_key\"])")

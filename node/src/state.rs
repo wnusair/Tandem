@@ -13,10 +13,6 @@ pub struct NodeState {
     pub node_id: String,
     #[serde(default)]
     pub node_token: String,
-    #[serde(default)]
-    pub server_url: String,
-    #[serde(default)]
-    pub registered_at: u64,
 }
 
 impl NodeState {

@@ -1,9 +1,9 @@
 """Per-account resource usage: what an account is using, and against what limit.
 
-This is scaffolding. Today only compute (instruction fuel) is really measured;
-RAM, storage, CPU, and GPU are placeholders with clear limits, sitting behind
-the same interface so they can be filled in later without changing any callers
-or the `tandem usage` output.
+This is scaffolding. Today only compute time (seconds the server measured) is
+really measured; RAM, storage, CPU, and GPU are placeholders with clear limits,
+sitting behind the same interface so they can be filled in later without
+changing any callers or the `tandem usage` output.
 
 Limits are per user *account*. A user may hold several API keys, so usage is
 summed across all of a user's keys.
@@ -12,7 +12,6 @@ summed across all of a user's keys.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
 
 from sqlalchemy import select
 
@@ -24,7 +23,7 @@ from app.utils.task_queue import get_all_node_ids, get_node, safe_int
 # Per-account limits. Real enforcement comes later; for now these are just the
 # numbers `tandem usage` shows percentages against. They're deliberately simple
 # constants so they're easy to move to per-account config or a DB column later.
-ACCOUNT_INSTRUCTION_LIMIT = quota.QUOTA_DEFAULT_LIMIT  # fuel units, rolling 24h
+ACCOUNT_COMPUTE_LIMIT_SECONDS = quota.QUOTA_DEFAULT_LIMIT  # compute seconds, rolling 24h
 ACCOUNT_RAM_LIMIT_BYTES = 5 * 2**30                    # 5 GiB
 ACCOUNT_STORAGE_LIMIT_BYTES = 5 * 2**30                # 5 GiB
 ACCOUNT_CPU_LIMIT_CORES = 4                            # placeholder
@@ -84,17 +83,17 @@ def _nodes_for_user(user_id: int) -> list[dict]:
     return [node for node in nodes if node.get("owner_user_id") == owner_id]
 
 
-def _collect_instructions(user_id: int) -> ResourceMetric:
-    """Real: sum the rolling instruction usage across the account's API keys."""
+def _collect_compute(user_id: int) -> ResourceMetric:
+    """Real: sum the rolling compute-seconds usage across the account's API keys."""
     used = 0
     for api_key in _account_api_keys(user_id):
         _, info = quota.check_quota(api_key)
         used += int(info.get("used", 0))
     return ResourceMetric(
-        type="instructions",
+        type="compute",
         used=float(used),
-        limit=float(ACCOUNT_INSTRUCTION_LIMIT),
-        unit="fuel",
+        limit=float(ACCOUNT_COMPUTE_LIMIT_SECONDS),
+        unit="seconds",
         source=MEASURED,
     )
 
@@ -124,16 +123,15 @@ def _collect_ram(user_id: int) -> ResourceMetric:
     )
 
 
-def _placeholder_collector(
-    resource_type: str, limit: float, unit: str
-) -> Callable[[int], ResourceMetric]:
-    """Build a collector that reports 0 used, clearly marked as a placeholder.
+def usage_for_user(user_id: int) -> list[ResourceMetric]:
+    """Gather every resource metric for one account.
 
-    Swap one of these out for a real collector (same signature) once the metric
-    can actually be measured, and nothing else has to change.
+    Compute time, CPU, and RAM are real once a node's registered; storage and
+    GPU are still placeholders -- a fixed limit with 0 used -- until wired up.
+    This is also the order `tandem usage` prints them in.
     """
 
-    def collect(user_id: int) -> ResourceMetric:
+    def placeholder(resource_type: str, limit: float, unit: str) -> ResourceMetric:
         return ResourceMetric(
             type=resource_type,
             used=0.0,
@@ -142,20 +140,10 @@ def _placeholder_collector(
             source=PLACEHOLDER,
         )
 
-    return collect
-
-
-# The registry. Add real collectors here as they get wired up; this order is the
-# order `tandem usage` prints them.
-_COLLECTORS: list[Callable[[int], ResourceMetric]] = [
-    _collect_instructions,
-    _collect_ram,
-    _placeholder_collector("storage", ACCOUNT_STORAGE_LIMIT_BYTES, "bytes"),
-    _collect_cpu,
-    _placeholder_collector("gpu", ACCOUNT_GPU_LIMIT_COUNT, "gpus"),
-]
-
-
-def usage_for_user(user_id: int) -> list[ResourceMetric]:
-    """Gather every resource metric for one account."""
-    return [collect(user_id) for collect in _COLLECTORS]
+    return [
+        _collect_compute(user_id),
+        _collect_ram(user_id),
+        placeholder("storage", ACCOUNT_STORAGE_LIMIT_BYTES, "bytes"),
+        _collect_cpu(user_id),
+        placeholder("gpu", ACCOUNT_GPU_LIMIT_COUNT, "gpus"),
+    ]

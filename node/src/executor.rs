@@ -37,10 +37,6 @@ pub fn execute_wasm(
     payload: &[u8],
     timeout_ms: Option<u64>,
 ) -> Result<ExecutionResult, Box<dyn std::error::Error>> {
-    eprintln!("[executor] payload len: {}", payload.len());
-    if payload.len() >= 8 {
-        eprintln!("[executor] payload prefix: {:?}", &payload[0..8]);
-    }
     let (wasm_bytes, input_bytes): (&[u8], &[u8]) =
         if payload.starts_with(b"TNDM") && payload.len() >= 8 {
             let mut len_bytes = [0u8; 4];

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import os
 import secrets
 import time
@@ -12,10 +11,11 @@ from cryptography.hazmat.primitives import serialization
 
 from app.extensions import db, redis_client
 from app.models import Deployment, NodePublicKey, TaskEncryptionKey
-from app.utils import quota, zkp
+from app.utils import quota, receipts, verify
 from app.utils.auth import get_api_client
 from app.utils.task_queue import (
     TASK_LEASE_SECONDS,
+    billed_seconds,
     claim_task_for_node,
     compare_token,
     complete_task,
@@ -25,9 +25,7 @@ from app.utils.task_queue import (
     get_task,
     requeue_task,
 )
-from flask import Blueprint, after_this_request, current_app, jsonify, request, send_file
-
-logger = logging.getLogger(__name__)
+from flask import Blueprint, current_app, jsonify, request, send_file
 
 nodes_bp = Blueprint("nodes", __name__)
 
@@ -66,6 +64,13 @@ def _require_node_auth():
 
     if not compare_token(node.get("node_token"), token):
         return None, None, (jsonify({"error": "Invalid node token"}), 403)
+
+    # Every node route comes through here, so this one check keeps a banned node
+    # away from claiming, downloading, reporting, and heartbeating alike. It has
+    # to live here rather than in the `nodes` set: a heartbeat re-adds the node
+    # to that set, so dropping it there on its own never stuck.
+    if receipts.is_node_banned(node_id):
+        return None, None, (jsonify({"error": "Node is banned"}), 403)
 
     return node_id, node, None
 
@@ -168,6 +173,13 @@ def register():
         return registration_error
 
     data = request.get_json(silent=True) or {}
+
+    # Don't let a banned node walk back in through the front door with a fresh
+    # node id. Checked before anything gets written so nothing is left behind.
+    rsa_pem = (data.get("rsa_public_key_pem") or "").strip()
+    if rsa_pem and receipts.is_public_key_banned(rsa_pem):
+        return jsonify({"error": "This node key is banned"}), 403
+
     node_id = f"node_{uuid.uuid4().hex[:12]}"
     node_token = secrets.token_urlsafe(32)
     timestamp = str(time.time())
@@ -192,7 +204,6 @@ def register():
     redis_client.sadd("nodes", node_id)
 
     # Accept optional RSA public key for task payload encryption
-    rsa_pem = (data.get("rsa_public_key_pem") or "").strip()
     if rsa_pem:
         try:
             serialization.load_pem_public_key(rsa_pem.encode("utf-8"))
@@ -283,8 +294,13 @@ def download_task_blob(tid: str, download_token: str):
         },
     )
 
-    # Attach encryption key headers if available
-    enc_key_row = TaskEncryptionKey.query.filter_by(tid=tid).first()
+    # Serve the DEK copy wrapped to THIS node's key. Each node gets its own
+    # wrapped copy at task creation, so a task that failed over still has a key
+    # the current holder can unwrap. We don't delete it here -- the task might
+    # fail over again -- it's cleared when the task completes or fails.
+    enc_key_row = TaskEncryptionKey.query.filter_by(
+        tid=tid, target_node_id=node_id
+    ).first()
 
     response = send_file(
         blob_path,
@@ -296,15 +312,6 @@ def download_task_blob(tid: str, download_token: str):
     if enc_key_row is not None:
         response.headers["X-Task-Dek-Encrypted"] = enc_key_row.encrypted_dek_b64
         response.headers["X-Task-IV"] = enc_key_row.iv_b64
-
-        @after_this_request
-        def _cleanup_enc_key(resp):
-            try:
-                TaskEncryptionKey.query.filter_by(tid=tid).delete()
-                db.session.commit()
-            except Exception:
-                logger.warning("Failed to delete TaskEncryptionKey for %s", tid, exc_info=True)
-            return resp
 
     return response
 
@@ -341,28 +348,29 @@ def submit_task_result(tid: str):
         except Exception:
             return jsonify({"error": "Could not decode execution receipt"}), 400
 
-        verified, reason = zkp.verify_receipt(receipt, result_bytes, node_id)
+        verified, reason = receipts.verify_receipt(receipt, result_bytes, node_id)
         if not verified:
-            bad_count = zkp.increment_bad_receipt_count(node_id)
-            if bad_count >= zkp.BAD_RECEIPT_THRESHOLD:
-                redis_client.srem("nodes", node_id)
-                logger.warning(
-                    "Node %s deregistered after %d bad receipts", node_id, bad_count
-                )
+            receipts.penalize_node(node_id, reason)
             # Re-queue the task instead of completing it
             requeue_task(tid, None)
             return jsonify({"error": f"Receipt verification failed: {reason}"}), 403
 
-        # Record instruction usage against the API key's quota
-        instruction_count = receipt.get("instruction_count", 0)
-        task_job = task.get("job_id", "")
-        task_pid = task.get("pid", "")
-        if task_pid:
-            dep = Deployment.query.filter_by(pid=task_pid).first()
-            if dep and dep.api_key:
-                quota.record_usage(dep.api_key, instruction_count)
+        # Charge the API key's quota for the compute this task used. We bill the
+        # seconds the server watched it run, not the instruction_count the node
+        # signed for itself -- the node owns that key and could put any number
+        # there. Verification replicas are hidden copies the user never asked
+        # for, so we don't bill those against them at all.
+        if not task.get("verify_replica"):
+            task_pid = task.get("pid", "")
+            if task_pid:
+                dep = Deployment.query.filter_by(pid=task_pid).first()
+                if dep and dep.api_key:
+                    quota.record_usage(dep.api_key, billed_seconds(task))
 
         summary = complete_task(tid, node_id, result_bytes=result_bytes)
+        # If this task is being cross-checked, see whether the other copies are
+        # in yet and whether they agree.
+        verify.on_task_settled(tid)
         return jsonify(
             {
                 "status": "completed",
@@ -374,6 +382,7 @@ def submit_task_result(tid: str):
     data = request.get_json(silent=True) or {}
     error_message = (data.get("error") or "Task execution failed").strip()
     summary = fail_task(tid, node_id, error_message=error_message)
+    verify.on_task_settled(tid)
 
     return jsonify(
         {

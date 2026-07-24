@@ -59,14 +59,20 @@ def serve_deploy():
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
     request.files["bundle"].save(str(bundle_path))
 
-    db.session.add(Deployment(name=name, pid=pid, api_key=api_client.api_key))
+    db.session.add(
+        Deployment(
+            name=name,
+            pid=pid,
+            user_id=api_client.user_id,
+            api_key=api_client.api_key,
+        )
+    )
     db.session.commit()
 
     serve_queue.create_serve_deployment(
         pid,
         start_command=shlex.split(start_command),
         replicas=replicas,
-        api_key=api_client.api_key,
     )
     return jsonify({"pid": pid, "url": f"/app/{pid}/"}), 201
 
@@ -156,7 +162,7 @@ def serve_list():
     deployments = []
     for pid in serve_queue.all_deployment_ids():
         row = Deployment.query.filter_by(pid=pid).first()
-        if not row or row.api_key != api_client.api_key:
+        if not row or row.user_id != api_client.user_id:
             continue
         meta = serve_queue.get_serve_deployment(pid) or {}
         deployments.append(

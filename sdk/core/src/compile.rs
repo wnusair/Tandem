@@ -37,11 +37,6 @@ impl CompileOptions {
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.values.insert(key.into(), value.into());
     }
-
-    /// Read one option back, if it was set.
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.values.get(key).map(|value| value.as_str())
-    }
 }
 
 /// What the compiled task is for.

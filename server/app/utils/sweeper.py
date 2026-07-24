@@ -7,6 +7,10 @@ sweep on a timer instead, so failover happens on its own.
 
 Only one server instance should sweep at a time (there may be several behind a
 load balancer), so each pass is guarded by a short-lived Redis lock.
+
+The same pass also settles verification groups that have been waiting too long
+for their other copies, so a stranded replica can't leave a client polling
+forever.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import time
 from app.extensions import redis_client
 from app.utils.serve_queue import reap_stale_serve_nodes
 from app.utils.task_queue import sweep_stale_work
+from app.utils.verify import settle_expired_groups
 
 # How often to run a sweep. Matches the node heartbeat cadence so a dead node is
 # noticed quickly.
@@ -39,6 +44,7 @@ def _run_loop(app) -> None:
                     with app.app_context():
                         sweep_stale_work()
                         reap_stale_serve_nodes()
+                        settle_expired_groups()
                 finally:
                     redis_client.delete(_SWEEP_LOCK_KEY)
         except Exception as exc:  # keep the loop alive no matter what goes wrong

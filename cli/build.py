@@ -105,7 +105,7 @@ def _compile_source_dir(config: ProjectConfig) -> Iterator[Path]:
 
 
 def build_project(config_path: str | Path, *, strict: bool = True) -> BuildResult:
-    """Build discovered tasks into placeholder WASM artifacts plus a manifest."""
+    """Build discovered tasks into compiled WASM components plus a manifest."""
 
     config, discovered, report = inspect_project(config_path)
     if strict and report.has_errors:

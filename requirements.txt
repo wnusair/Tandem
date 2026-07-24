@@ -1,7 +1,5 @@
 flask
 flask-redis
-flask-api-key
-python-dotenv
 Flask-SQLAlchemy
 psycopg2-binary>=2.9
 python-dotenv>=0.21.0

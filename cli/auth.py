@@ -140,7 +140,6 @@ class AuthSession:
     refresh_token: str
     api_key: str
     server_url: str
-    created_api_key: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +333,6 @@ def login_user(
         refresh_token=payload["refresh_token"],
         api_key=payload["api_key"],
         server_url=resolved_server_url,
-        created_api_key=bool(payload.get("created_api_key")),
     )
 
 
@@ -371,7 +369,7 @@ def refresh_access_token(server_url: str | None = None) -> str | None:
     return None
 
 
-def store_auth_session(session: AuthSession, **_kwargs) -> None:
+def store_auth_session(session: AuthSession) -> None:
     """Persist all session tokens and credentials to the OS keyring."""
     _keyring_set(_KEYRING_SERVER_URL_KEY, session.server_url)
     _keyring_set(_KEYRING_USERNAME_KEY, session.username)

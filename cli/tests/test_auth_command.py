@@ -25,11 +25,6 @@ def _use_isolated_credentials_file(test_case: unittest.TestCase, tmpdir: str) ->
     test_case.addCleanup(patcher_path.stop)
 
 
-class _FakeRequest:
-    def __init__(self, method: str) -> None:
-        self.method = method
-
-
 class _FakeResponse:
     def __init__(
         self, *, status_code: int, payload: dict[str, object], url: str
@@ -39,7 +34,6 @@ class _FakeResponse:
         self.url = url
         self.headers = {"Content-Type": "application/json"}
         self.text = json.dumps(payload)
-        self.request = _FakeRequest("POST")
 
     def json(self) -> dict[str, object]:
         return self._payload

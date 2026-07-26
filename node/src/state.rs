@@ -31,10 +31,10 @@ impl NodeState {
     /// Write the identity out as pretty JSON, creating the parent directory if
     /// it isn't there yet.
     pub fn save(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(parent) = Path::new(path).parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = Path::new(path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
         }
         let text = serde_json::to_string_pretty(self)?;
         fs::write(path, text)?;

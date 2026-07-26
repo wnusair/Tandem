@@ -1,0 +1,79 @@
+# Windows-native twin of docker/docker-compose.yml -- same stack (redis + the
+# control-plane server + two compute nodes + a "driver" that plays a developer
+# building and running a task), but the node and driver images compile their
+# Rust binaries inside the Docker build itself (see Dockerfile.node and
+# Dockerfile.driver) instead of expecting a host-built release binary, since
+# `cargo build` on Windows produces a .exe that can't run in these Linux
+# containers. Run it with docker-windows/build.ps1.
+#
+# The build context is the repo root (..), since the images copy in server code,
+# the CLI, the SDK, and the sample apps live in this folder.
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  server:
+    build:
+      context: ..
+      dockerfile: docker-windows/Dockerfile.server
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: sqlite:////srv/server/dev.db
+      TANDEM_NODE_REGISTRATION_TOKEN: tandem-dev-token
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6767/')"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+
+  node1:
+    build:
+      context: ..
+      dockerfile: docker-windows/Dockerfile.node
+    environment:
+      TANDEM_SERVER_URL: http://server:6767
+      TANDEM_NODE_REGISTRATION_TOKEN: tandem-dev-token
+    # bubblewrap sandboxes web apps with user namespaces, which Docker's default
+    # seccomp/apparmor profiles block. On a real partner-machine node this isn't
+    # needed; inside Docker we relax those so the sandbox can run.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
+    depends_on:
+      server:
+        condition: service_healthy
+
+  node2:
+    build:
+      context: ..
+      dockerfile: docker-windows/Dockerfile.node
+    environment:
+      TANDEM_SERVER_URL: http://server:6767
+      TANDEM_NODE_REGISTRATION_TOKEN: tandem-dev-token
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
+    depends_on:
+      server:
+        condition: service_healthy
+
+  driver:
+    build:
+      context: ..
+      dockerfile: docker-windows/Dockerfile.driver
+    environment:
+      TANDEM_SERVER_URL: http://server:6767
+    depends_on:
+      server:
+        condition: service_healthy

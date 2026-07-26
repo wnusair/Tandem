@@ -1,0 +1,55 @@
+# The "driver" plays the role of a developer's machine: it has the CLI, the
+# compile engine, componentize-py, and a sample project, and it runs the
+# end-to-end script against the server.
+#
+# Unlike docker/Dockerfile.driver, this one compiles tandem-compile itself in
+# a Linux build stage instead of expecting a host-built release binary copied
+# in -- see docker-windows/Dockerfile.node for why.
+FROM rust:1-slim-bookworm AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# Just the core crate (not the sdk/ workspace root), so this stage doesn't
+# also need to build the PyO3 wrapper crate -- tandem-compile only needs
+# tandem-core.
+COPY sdk/core ./sdk/core
+RUN cargo build --release --manifest-path sdk/core/Cargo.toml --bin tandem-compile
+
+FROM ubuntu:24.04
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-pip ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# The compile engine binary and the WIT contract.
+COPY --from=build /src/sdk/core/target/release/tandem-compile /usr/local/bin/tandem-compile
+COPY sdk/wit /opt/tandem/wit
+
+# Install the CLI and the runtime SDK into a private venv. componentize-py comes
+# in as a dependency of the CLI.
+COPY cli /opt/tandem/cli
+COPY sdk/python-sdk /opt/tandem/sdk-python
+RUN python3 -m venv /opt/tandem/venv \
+    && /opt/tandem/venv/bin/pip install --no-cache-dir \
+        /opt/tandem/cli /opt/tandem/sdk-python
+
+ENV PATH=/opt/tandem/venv/bin:$PATH
+ENV TANDEM_COMPILE_BIN=/usr/local/bin/tandem-compile
+ENV TANDEM_COMPONENTIZE_PY=/opt/tandem/venv/bin/componentize-py
+ENV TANDEM_WIT_DIR=/opt/tandem/wit
+ENV TANDEM_COMPILE_CACHE=/opt/tandem/cache
+# The compute happens on the nodes, so the driver doesn't run a local node.
+ENV TANDEM_SKIP_NODE_CHECK=1
+
+COPY docker-windows/sample /opt/tandem/sample
+COPY docker-windows/sample-serve /opt/tandem/sample-serve
+COPY sdk/python-sdk/examples /opt/tandem/examples
+COPY docker-windows/e2e.sh /opt/tandem/e2e.sh
+RUN chmod +x /opt/tandem/e2e.sh
+
+WORKDIR /opt/tandem/sample
+CMD ["/opt/tandem/e2e.sh"]

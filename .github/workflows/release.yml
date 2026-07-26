@@ -30,7 +30,15 @@ permissions:
   contents: write
 
 jobs:
+  # Same lint/test/build/e2e checks that run on every push and PR (see
+  # checks.yml) -- a release re-runs them on the tagged commit so a release
+  # can never ship past a failing check, even if CI on the branch it came
+  # from was skipped or has since moved on.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   build:
+    needs: checks
     strategy:
       # Don't cancel the other platforms if one fails -- we'd rather see all
       # three results.

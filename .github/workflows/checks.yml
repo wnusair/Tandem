@@ -1,0 +1,115 @@
+# The test/lint/build checks every push and PR has to pass (see ci.yml), and
+# that a release also has to pass before it's allowed to build and publish
+# (see release.yml). Kept as one reusable workflow so both call the same jobs
+# instead of maintaining two copies.
+#
+# See docs/ci.md for how to run each of these checks locally.
+
+name: checks
+
+on:
+  workflow_call:
+
+jobs:
+  lint-python:
+    name: lint (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff
+      # Scoped to pyflakes (F) -- real bugs like unused imports and undefined
+      # names -- rather than the full stylistic rule set, since this codebase
+      # has never been auto-formatted. cli/_bundled is a vendored copy of the
+      # SDK (see test_sdk_bundle_sync.py) and cli/build is a build artifact
+      # dir, so both are excluded.
+      - name: ruff check
+        run: >
+          ruff check cli server sdk/python-sdk
+          --select F
+          --extend-exclude cli/_bundled
+          --extend-exclude cli/build
+
+  lint-rust:
+    name: lint (rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: clippy (node)
+        run: cargo clippy --manifest-path node/Cargo.toml --all-targets -- -D warnings
+      - name: clippy (sdk)
+        run: cargo clippy --manifest-path sdk/Cargo.toml --all-targets -- -D warnings
+
+  test-python:
+    name: test (python)
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Installing the CLI and SDK (rather than just adding them to PYTHONPATH)
+      # also doubles as the python build check -- it fails if either package's
+      # setuptools metadata is broken.
+      - name: Install server, CLI, and SDK
+        run: |
+          pip install -r requirements.txt
+          pip install -e ./cli
+          pip install -e ./sdk/python-sdk
+          pip install pytest
+      - name: Run the test suites
+        run: pytest server/tests cli/tests sdk/python-sdk/tests
+
+  test-rust:
+    name: test (rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # The node's sandbox tests skip themselves when bwrap isn't on PATH;
+      # installing it here lets them actually run instead of no-op.
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
+      - name: cargo test (node)
+        run: cargo test --manifest-path node/Cargo.toml
+      - name: cargo test (sdk)
+        run: cargo test --manifest-path sdk/Cargo.toml
+
+  e2e:
+    name: end-to-end (docker)
+    # The e2e stack is the slowest check by far, so let the fast checks catch
+    # obvious breakage first instead of burning minutes building it too.
+    needs: [lint-python, lint-rust, test-python, test-rust]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binaries + docker images
+        run: bash docker/build.sh
+      - name: Run the end-to-end stack
+        run: |
+          docker compose -f docker/docker-compose.yml up \
+            --abort-on-container-exit --exit-code-from driver
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v

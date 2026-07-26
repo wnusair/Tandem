@@ -73,3 +73,21 @@ See `docker/docker-compose.yml` for what each service does, and
 `docker/failover-test.sh` for the separate node-failover scenario (not run in
 CI -- it's a slower, more manual check for when you're touching failover
 logic specifically).
+
+### Testing this on Windows
+
+`docker/build.sh` compiles the node and `tandem-compile` on the host, which
+only works if the host is Linux or macOS -- `cargo build` on Windows produces
+a `.exe`, which can't run in these Linux containers no matter what you name
+it. Use `docker-windows/` instead: same stack, same sample apps, but
+`Dockerfile.node` and `Dockerfile.driver` compile the Rust binaries in a
+Linux build stage inside Docker itself, so it works the same regardless of
+host OS. From PowerShell:
+
+```powershell
+.\docker-windows\build.ps1
+docker compose -f docker-windows/docker-compose.yml up --abort-on-container-exit --exit-code-from driver
+```
+
+`docker-windows/failover-test.ps1` is the PowerShell twin of
+`docker/failover-test.sh`.

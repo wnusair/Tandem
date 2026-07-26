@@ -31,7 +31,6 @@ import ast
 import importlib.util
 import inspect
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -41,7 +40,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tandem.errors import TandemBuildError
-from tandem.validator import validate_independence, validate_wasm_types
+from tandem.validator import validate_wasm_types
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +552,7 @@ class _RustTranspiler(ast.NodeVisitor):
                         f".step_by({self._expr(node.args[2])} as usize)"
                     )
             if name == "print":
-                fmt_args = ", ".join(f"{{}}")
+                fmt_args = ", ".join("{}")
                 return f'println!("{fmt_args}", {args})'
             if name == "sum":
                 return f"{self._expr(node.args[0])}.iter().sum::<i64>()"

@@ -332,7 +332,6 @@ def submit_task_result(tid: str):
 
         # Record instruction usage against the API key's quota
         instruction_count = receipt.get("instruction_count", 0)
-        task_job = task.get("job_id", "")
         task_pid = task.get("pid", "")
         if task_pid:
             dep = Deployment.query.filter_by(pid=task_pid).first()

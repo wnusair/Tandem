@@ -6,7 +6,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 
 from .analysis import AnalysisReport, Diagnostic, analyze_tasks
 from .app_config import ProjectConfig, load_project_config

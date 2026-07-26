@@ -16,12 +16,11 @@ import requests
 from dotenv import find_dotenv, load_dotenv
 
 from .analysis import Diagnostic
-from .app_config import load_project_config, write_project_config
+from .app_config import write_project_config
 from .auth import (
     clear_auth_session,
     clear_stored_registration_token,
     clear_stored_server_url,
-    get_api_key,
     get_stored_registration_token,
     get_stored_server_url,
     load_auth_session,

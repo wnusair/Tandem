@@ -8,7 +8,6 @@ or has been in a terminal state for longer than the retention window.
 """
 
 import argparse
-import os
 import pathlib
 import sys
 import time
@@ -18,7 +17,6 @@ server_dir = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(server_dir))
 
 from app import create_app
-from app.extensions import redis_client
 from app.utils.task_queue import get_task
 
 

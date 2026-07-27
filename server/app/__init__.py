@@ -98,7 +98,9 @@ def create_app():
     db.init_app(app)
 
     # Load every SQLAlchemy model so Alembic can detect the full schema.
-    import app.models  # noqa: F401
+    import importlib
+
+    importlib.import_module("app.models")
 
     migrate.init_app(app, db)
 

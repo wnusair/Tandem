@@ -64,12 +64,11 @@ impl ServedApp {
     }
 }
 
-/// Launch a web app in the sandbox and wait for its socket to come up.
+/// Fork the app in the sandbox WITHOUT waiting for its socket to come up.
 ///
 /// * `work_dir` already contains the unpacked app (its code is at the top).
 /// * `start_command` is what the user told us to run, e.g. `["python3", "app.py"]`.
 /// * `limits` are the resource ceilings (the account's RAM cap, etc.).
-/// Fork the app in the sandbox WITHOUT waiting for its socket to come up.
 ///
 /// Important subtlety: bwrap's `--die-with-parent` ties the app's lifetime to
 /// the *thread* that forked it (Linux `PR_SET_PDEATHSIG` is thread-scoped, not
@@ -133,11 +132,11 @@ pub fn launch_app(
 async fn wait_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        if socket_path.exists() {
-            if let Ok(stream) = UnixStream::connect(socket_path) {
-                drop(stream);
-                return Ok(());
-            }
+        if socket_path.exists()
+            && let Ok(stream) = UnixStream::connect(socket_path)
+        {
+            drop(stream);
+            return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(io::Error::new(
@@ -153,11 +152,11 @@ async fn wait_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
 fn wait_until_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        if socket_path.exists() {
-            if let Ok(stream) = UnixStream::connect(socket_path) {
-                drop(stream);
-                return Ok(());
-            }
+        if socket_path.exists()
+            && let Ok(stream) = UnixStream::connect(socket_path)
+        {
+            drop(stream);
+            return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(io::Error::new(
@@ -476,10 +475,7 @@ async fn setup_app(
                 .arg(&work_dir)
                 .status()?;
             if !status.success() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "could not unpack the app bundle",
-                ));
+                return Err(io::Error::other("could not unpack the app bundle"));
             }
             let _ = fs::remove_file(&tar_path);
             Ok(())

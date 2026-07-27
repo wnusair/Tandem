@@ -87,6 +87,12 @@ jobs:
       # installing it here lets them actually run instead of no-op.
       - name: Install bubblewrap
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
+      # ubuntu-latest (24.04) blocks unprivileged user namespaces by default,
+      # which is exactly what bwrap needs -- same restriction docker-compose.yml
+      # already works around for the node containers via security_opt. `|| true`
+      # because older/other kernels don't have this sysctl at all.
+      - name: Allow unprivileged user namespaces (needed by bwrap)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: cargo test (node)
         run: cargo test --manifest-path node/Cargo.toml
       - name: cargo test (sdk)

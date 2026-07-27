@@ -18,6 +18,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.server
+    ports:
+      - "6767:6767"
     environment:
       REDIS_URL: redis://redis:6379/0
       DATABASE_URL: sqlite:////srv/server/dev.db

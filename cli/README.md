@@ -277,7 +277,7 @@ Security notes:
 From the repo root:
 
 ```bash
-tandem start cli/test.toml
+tandem start docker-windows/sample/tandem.toml
 ```
 
 That command will:
@@ -289,22 +289,24 @@ That command will:
 5. wait for node execution,
 6. print the returned results.
 
+(No sample project handy? `tandem init` will walk you through creating one.)
+
 If you want to just create the deployment first:
 
 ```bash
-tandem deploy cli/test.toml
+tandem deploy docker-windows/sample/tandem.toml
 ```
 
 If you already have a deployment pid and want to reuse it:
 
 ```bash
-tandem start cli/test.toml --pid <deployment-pid>
+tandem start docker-windows/sample/tandem.toml --pid <deployment-pid>
 ```
 
 If you want to queue the job without waiting:
 
 ```bash
-tandem start cli/test.toml --no-wait
+tandem start docker-windows/sample/tandem.toml --no-wait
 ```
 
 That prints the `job_token`, status URL, and results URL.

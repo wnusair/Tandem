@@ -12,6 +12,7 @@ os.environ.setdefault("DATABASE_URL", f"sqlite:///{_tmp_db.name}")
 
 from app import create_app  # noqa: E402
 from app.extensions import db, redis_client  # noqa: E402
+from app.utils import task_queue  # noqa: E402
 
 
 class HealthEndpointTests(unittest.TestCase):
@@ -65,6 +66,36 @@ class HealthEndpointTests(unittest.TestCase):
         body = response.get_json()
         self.assertEqual(body["checks"]["postgres"], "error")
         self.assertNotIn("postgresql://", response.get_data(as_text=True))
+
+    def test_metrics_exposes_queue_depth_and_task_outcome_counters(self) -> None:
+        job = task_queue.create_job("pid1", "job-name", {}, 1)
+        redis_client.sadd("nodes", "node-a")
+        redis_client.hset("node:node-a", mapping={"last_seen": task_queue.now_ts()})
+        tid = task_queue.create_task(
+            job_id=job["job_id"], pid="pid1", name="n", filename="a.py",
+            payload=b"x", assigned_node="node-a",
+        )
+        task_queue.claim_task_for_node("node-a")
+        task_queue.complete_task(tid, "node-a", result_bytes=b"result")
+
+        response = self.client.get("/metrics")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/plain", response.content_type)
+
+        body = response.get_data(as_text=True)
+        self.assertIn("tandem_queue_depth_tasks 0", body)
+        self.assertIn("tandem_nodes_total 1", body)
+        self.assertIn("tandem_nodes_healthy 1", body)
+        self.assertIn("tandem_tasks_completed_total 1", body)
+        self.assertIn("tandem_tasks_failed_total 0", body)
+        self.assertIn("tandem_task_latency_seconds_count 1", body)
+        self.assertIn("tandem_task_failure_ratio 0.000000", body)
+        self.assertIn("# TYPE tandem_queue_depth_tasks gauge", body)
+        self.assertIn("# TYPE tandem_tasks_completed_total counter", body)
+
+    def test_metrics_requires_no_auth(self) -> None:
+        response = self.client.get("/metrics")
+        self.assertEqual(response.status_code, 200)
 
 
 if __name__ == "__main__":

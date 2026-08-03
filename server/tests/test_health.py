@@ -80,7 +80,7 @@ class HealthEndpointTests(unittest.TestCase):
 
         response = self.client.get("/metrics")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("text/plain", response.content_type)
+        self.assertEqual(response.content_type, "text/plain; version=0.0.4; charset=utf-8")
 
         body = response.get_data(as_text=True)
         self.assertIn("tandem_queue_depth_tasks 0", body)
@@ -92,6 +92,26 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertIn("tandem_task_failure_ratio 0.000000", body)
         self.assertIn("# TYPE tandem_queue_depth_tasks gauge", body)
         self.assertIn("# TYPE tandem_tasks_completed_total counter", body)
+
+    def test_metrics_exposes_failure_path_task_metrics(self) -> None:
+        job = task_queue.create_job("pid1", "job-name", {}, 1)
+        redis_client.sadd("nodes", "node-a")
+        redis_client.hset("node:node-a", mapping={"last_seen": task_queue.now_ts()})
+        tid = task_queue.create_task(
+            job_id=job["job_id"], pid="pid1", name="n", filename="a.py",
+            payload=b"x", assigned_node="node-a",
+        )
+        task_queue.claim_task_for_node("node-a")
+        task_queue.fail_task(tid, "node-a", error_message="boom")
+
+        response = self.client.get("/metrics")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content_type, "text/plain; version=0.0.4; charset=utf-8")
+
+        body = response.get_data(as_text=True)
+        self.assertIn("tandem_tasks_failed_total 1", body)
+        self.assertIn("tandem_task_failure_ratio 1.000000", body)
+        self.assertIn("tandem_task_latency_seconds_sum", body)
 
     def test_metrics_requires_no_auth(self) -> None:
         response = self.client.get("/metrics")

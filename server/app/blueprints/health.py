@@ -86,10 +86,10 @@ def _render_prometheus_metrics() -> str:
         "# HELP tandem_tasks_failed_total Tasks that finished with an error, cumulative since the last Redis flush.",
         "# TYPE tandem_tasks_failed_total counter",
         f"tandem_tasks_failed_total {task_metrics['failed_total']}",
-        "# HELP tandem_task_latency_seconds_sum Sum of queue-to-terminal latency across finished tasks, in seconds.",
+        "# HELP tandem_task_latency_seconds_sum Sum of queue-to-terminal latency across finished tasks, in seconds, cumulative since the last Redis flush.",
         "# TYPE tandem_task_latency_seconds_sum counter",
         f"tandem_task_latency_seconds_sum {task_metrics['latency_seconds_sum']:.6f}",
-        "# HELP tandem_task_latency_seconds_count Finished tasks counted in tandem_task_latency_seconds_sum.",
+        "# HELP tandem_task_latency_seconds_count Finished tasks counted in tandem_task_latency_seconds_sum, cumulative since the last Redis flush.",
         "# TYPE tandem_task_latency_seconds_count counter",
         f"tandem_task_latency_seconds_count {terminal_count}",
         "# HELP tandem_task_failure_ratio Fraction of finished tasks that failed, from 0 to 1.",
@@ -103,5 +103,5 @@ def _render_prometheus_metrics() -> str:
 @health_bp.route("/metrics", methods=["GET"])
 def metrics():
     return Response(
-        _render_prometheus_metrics(), mimetype="text/plain; version=0.0.4; charset=utf-8"
+        _render_prometheus_metrics(), content_type="text/plain; version=0.0.4; charset=utf-8"
     )

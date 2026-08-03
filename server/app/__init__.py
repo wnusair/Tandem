@@ -122,6 +122,7 @@ def create_app():
     from app.blueprints.auth import auth_bp
     from app.blueprints.deploy import deploy_bp
     from app.blueprints.desktop import desktop_bp
+    from app.blueprints.health import health_bp
     from app.blueprints.index import index_bp
     from app.blueprints.nodes import nodes_bp
     from app.blueprints.serve import serve_bp
@@ -129,6 +130,7 @@ def create_app():
     from app.blueprints.usage import usage_bp
 
     app.register_blueprint(index_bp, url_prefix="/")
+    app.register_blueprint(health_bp, url_prefix="/")
     app.register_blueprint(start_bp, url_prefix="/start")
     app.register_blueprint(deploy_bp, url_prefix="/deploy")
     app.register_blueprint(nodes_bp, url_prefix="/nodes")

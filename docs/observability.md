@@ -38,7 +38,7 @@ server-side (`logger.error(..., exc_info=True)`) for whoever is watching logs:
 
 ## `GET /metrics` — queue and task metrics
 
-Prometheus text-exposition format (`Content-Type: text/plain; version=0.0.4`),
+Prometheus text-exposition format (`Content-Type: text/plain; version=0.0.4; charset=utf-8`),
 scrapeable by Prometheus directly or any tool that understands that format.
 
 All counters are **cumulative since the Redis instance was last flushed or
@@ -63,9 +63,24 @@ Example scrape:
 # HELP tandem_queue_depth_tasks Tasks waiting in a Redis queue to be claimed by a node.
 # TYPE tandem_queue_depth_tasks gauge
 tandem_queue_depth_tasks 3
+# HELP tandem_nodes_total Nodes currently tracked by the server.
+# TYPE tandem_nodes_total gauge
+tandem_nodes_total 5
+# HELP tandem_nodes_healthy Nodes with a heartbeat inside the staleness window.
+# TYPE tandem_nodes_healthy gauge
+tandem_nodes_healthy 4
 # HELP tandem_tasks_completed_total Tasks that finished successfully, cumulative since the last Redis flush.
 # TYPE tandem_tasks_completed_total counter
 tandem_tasks_completed_total 42
+# HELP tandem_tasks_failed_total Tasks that finished with an error, cumulative since the last Redis flush.
+# TYPE tandem_tasks_failed_total counter
+tandem_tasks_failed_total 3
+# HELP tandem_task_latency_seconds_sum Sum of queue-to-terminal latency across finished tasks, in seconds, cumulative since the last Redis flush.
+# TYPE tandem_task_latency_seconds_sum counter
+tandem_task_latency_seconds_sum 123.456789
+# HELP tandem_task_latency_seconds_count Finished tasks counted in tandem_task_latency_seconds_sum, cumulative since the last Redis flush.
+# TYPE tandem_task_latency_seconds_count counter
+tandem_task_latency_seconds_count 45
 # HELP tandem_task_failure_ratio Fraction of finished tasks that failed, from 0 to 1.
 # TYPE tandem_task_failure_ratio gauge
 tandem_task_failure_ratio 0.066667

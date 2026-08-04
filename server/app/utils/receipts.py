@@ -21,7 +21,7 @@ import logging
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, utils as asym_utils
+from cryptography.hazmat.primitives.asymmetric import padding
 
 from app.extensions import redis_client
 from app.models import NodePublicKey

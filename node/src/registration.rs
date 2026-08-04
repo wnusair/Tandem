@@ -65,10 +65,10 @@ struct RegisterResponse {
 /// token. Empty counts as unset.
 fn registration_auth() -> Option<String> {
     for var in ["TANDEM_NODE_AUTH_TOKEN", "TANDEM_NODE_REGISTRATION_TOKEN"] {
-        if let Ok(value) = env::var(var) {
-            if !value.is_empty() {
-                return Some(value);
-            }
+        if let Ok(value) = env::var(var)
+            && !value.is_empty()
+        {
+            return Some(value);
         }
     }
     None

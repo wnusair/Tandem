@@ -18,7 +18,6 @@ NodePublicKey RSA verification, or signed receipt verification in any way.
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps

@@ -1,9 +1,13 @@
-# Full Tandem stack for an end-to-end test: redis + the control-plane server +
-# two compute nodes + a "driver" that plays a developer building and running a
-# task. Run it with docker/build.sh (which builds the release binaries first).
+# Windows-native twin of docker/docker-compose.yml -- same stack (redis + the
+# control-plane server + two compute nodes + a "driver" that plays a developer
+# building and running a task), but the node and driver images compile their
+# Rust binaries inside the Docker build itself (see Dockerfile.node and
+# Dockerfile.driver) instead of expecting a host-built release binary, since
+# `cargo build` on Windows produces a .exe that can't run in these Linux
+# containers. Run it with docker-windows/build.ps1.
 #
 # The build context is the repo root (..), since the images copy in server code,
-# the CLI, the SDK, and the two release binaries.
+# the CLI, the SDK, and the sample apps live in this folder.
 
 services:
   redis:
@@ -17,7 +21,7 @@ services:
   server:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.server
+      dockerfile: docker-windows/Dockerfile.server
     ports:
       - "6767:6767"
     environment:
@@ -36,7 +40,7 @@ services:
   node1:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.node
+      dockerfile: docker-windows/Dockerfile.node
     environment:
       TANDEM_SERVER_URL: http://server:6767
       TANDEM_NODE_REGISTRATION_TOKEN: tandem-dev-token
@@ -54,7 +58,7 @@ services:
   node2:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.node
+      dockerfile: docker-windows/Dockerfile.node
     environment:
       TANDEM_SERVER_URL: http://server:6767
       TANDEM_NODE_REGISTRATION_TOKEN: tandem-dev-token
@@ -69,7 +73,7 @@ services:
   driver:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.driver
+      dockerfile: docker-windows/Dockerfile.driver
     environment:
       TANDEM_SERVER_URL: http://server:6767
     depends_on:

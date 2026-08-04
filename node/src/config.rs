@@ -57,10 +57,10 @@ impl NodeConfig {
 /// Prefer a non-empty environment variable, then a non-empty saved value, then
 /// an empty string (which the caller reads as "not registered yet").
 fn env_or_saved(env_key: &str, saved: Option<&str>) -> String {
-    if let Ok(value) = env::var(env_key) {
-        if !value.is_empty() {
-            return value;
-        }
+    if let Ok(value) = env::var(env_key)
+        && !value.is_empty()
+    {
+        return value;
     }
     saved
         .filter(|v| !v.is_empty())

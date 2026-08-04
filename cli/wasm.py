@@ -12,17 +12,19 @@ from typing import Any
 def _resolve_compile_bin() -> str:
     """Find the `tandem-compile` engine binary.
 
-    An explicit env override wins; otherwise we look where install.sh puts it
-    (next to the node binary), then fall back to PATH and finally the bare name
-    so the subprocess call raises a clear "not found" error.
+    An explicit env override wins; otherwise we look where install.sh /
+    install.bat put it (next to the node binary), then fall back to PATH and
+    finally the bare name so the subprocess call raises a clear "not found"
+    error.
     """
     override = os.environ.get("TANDEM_COMPILE_BIN")
     if override:
         return override
-    home_bin = Path.home() / ".tandem" / "bin" / "tandem-compile"
+    binary_name = "tandem-compile.exe" if os.name == "nt" else "tandem-compile"
+    home_bin = Path.home() / ".tandem" / "bin" / binary_name
     if home_bin.exists():
         return str(home_bin)
-    return shutil.which("tandem-compile") or "tandem-compile"
+    return shutil.which(binary_name) or binary_name
 
 
 def _resolve_componentize_py() -> str:
@@ -35,10 +37,11 @@ def _resolve_componentize_py() -> str:
     override = os.environ.get("TANDEM_COMPONENTIZE_PY")
     if override:
         return override
-    sibling = Path(sys.executable).parent / "componentize-py"
+    binary_name = "componentize-py.exe" if os.name == "nt" else "componentize-py"
+    sibling = Path(sys.executable).parent / binary_name
     if sibling.exists():
         return str(sibling)
-    return shutil.which("componentize-py") or "componentize-py"
+    return shutil.which(binary_name) or binary_name
 
 
 def _resolve_wit_dir() -> str:

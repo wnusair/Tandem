@@ -1,0 +1,5 @@
+# Shell scripts get run inside Linux containers and under WSL/git-bash, where
+# a CRLF-terminated shebang line (`#!/usr/bin/env bash` becoming `bash\r`)
+# fails outright. Force LF regardless of what a Windows checkout would
+# otherwise do with core.autocrlf.
+*.sh text eol=lf

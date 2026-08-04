@@ -1,0 +1,6 @@
+[project]
+name = "e2e-demo"
+runtime = "python"
+version = "0.1.0"
+entry = "app.py"
+output_dir = ".tandem_build/e2e-demo"

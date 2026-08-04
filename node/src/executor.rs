@@ -202,7 +202,11 @@ fn run_component(
 
     // Give the component the standard WASI surface it imports, but no real files
     // or sockets: a compute task only ever gets its input and returns its output.
-    let ctx = WasiCtxBuilder::new().build();
+    // stderr is captured (not inherited) so that if the guest traps -- e.g. an
+    // unhandled Python exception, since our WIT contract has no error variant --
+    // we can surface whatever it printed instead of just the opaque wasmtime trap.
+    let stderr_buf = wasmtime_wasi::pipe::MemoryOutputPipe::new(64 * 1024);
+    let ctx = WasiCtxBuilder::new().stderr(stderr_buf.clone()).build();
     let host = ComponentHost {
         ctx,
         table: ResourceTable::new(),
@@ -227,7 +231,14 @@ fn run_component(
     if let Err(err) = run.call(&mut store, &[input_val], &mut results) {
         // A fuel-exhaustion or real trap becomes an error here; a clean exit(0)
         // would leave us without a result, which is still a failure for a task.
-        interpret_run_error(err)?;
+        let stderr_text = String::from_utf8_lossy(&stderr_buf.contents()).into_owned();
+        interpret_run_error(err).map_err(|e| -> Box<dyn std::error::Error> {
+            if stderr_text.trim().is_empty() {
+                e
+            } else {
+                format!("{e}\nguest stderr:\n{}", stderr_text.trim()).into()
+            }
+        })?;
         return Err("component `run` did not return a result".into());
     }
     // Let the guest run any cleanup it registered for after returning.

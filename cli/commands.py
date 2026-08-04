@@ -21,7 +21,6 @@ from .auth import (
     clear_auth_session,
     clear_stored_registration_token,
     clear_stored_server_url,
-    get_api_key,
     get_stored_registration_token,
     get_stored_server_url,
     load_auth_session,

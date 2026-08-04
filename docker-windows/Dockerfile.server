@@ -1,0 +1,17 @@
+# The Tandem control-plane server. Pure Python, so a slim base is fine.
+FROM python:3.12-slim
+
+WORKDIR /srv
+
+# Install the server's dependencies first so the layer caches across code edits.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Then the server code itself.
+COPY server/ ./server/
+
+WORKDIR /srv/server
+EXPOSE 6767
+
+# run.py binds 0.0.0.0:6767.
+CMD ["python", "run.py"]

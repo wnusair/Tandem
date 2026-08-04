@@ -167,7 +167,7 @@ echo Pick whichever is easier:
 echo   A^) Install Rust from https://rustup.rs then re-run install.bat
 echo   B^) Download tandem-node.exe from a release, then run:
 echo        set "TANDEM_NODE_BIN=C:\path\to\tandem-node.exe" ^&^& install.bat
-goto path_check
+goto compile_install
 
 :node_copy_failed
 echo.
@@ -178,8 +178,58 @@ goto path_check
 :node_ok
 echo Tandem node installed at %NODE_DEST%
 
+:compile_install
+REM 7. Install the Tandem compile engine (tandem-compile). This is the little
+REM Rust program `tandem build` / `tandem start` shell out to -- it turns
+REM marked Python into a WASM component. componentize-py itself already came
+REM along as one of the CLI's Python dependencies (step 3), so all we need
+REM here is this binary.
+set "COMPILE_DEST=%BIN_DIR%\tandem-compile.exe"
+
+REM An explicit prebuilt binary wins, same as the node.
+if defined TANDEM_COMPILE_BIN (
+  if exist "%TANDEM_COMPILE_BIN%" (
+    echo Using the prebuilt compile binary at %TANDEM_COMPILE_BIN%
+    copy /y "%TANDEM_COMPILE_BIN%" "%COMPILE_DEST%" >nul
+    goto compile_ok
+  )
+  echo warning: TANDEM_COMPILE_BIN is set but "%TANDEM_COMPILE_BIN%" does not exist; ignoring it.
+)
+
+REM Otherwise build it from the source in this repo, if Rust is available.
+where cargo >nul 2>&1
+if not errorlevel 1 (
+  echo Building the Tandem compile engine from source ...
+  cargo build --release --manifest-path "%REPO_ROOT%\sdk\core\Cargo.toml" --bin tandem-compile
+  if not errorlevel 1 (
+    copy /y "%REPO_ROOT%\sdk\target\release\tandem-compile.exe" "%COMPILE_DEST%" >nul
+    goto compile_ok
+  )
+  echo warning: building tandem-compile failed -- see the cargo output above.
+)
+
+REM No Cargo, but maybe there's already a build lying around from before.
+if exist "%REPO_ROOT%\sdk\target\release\tandem-compile.exe" (
+  echo Cargo isn't installed, but found an existing compile build -- using it.
+  copy /y "%REPO_ROOT%\sdk\target\release\tandem-compile.exe" "%COMPILE_DEST%" >nul
+  goto compile_ok
+)
+
+REM Nothing we can do on our own. Tell the user exactly what to do.
+echo.
+echo Could not install the Tandem compile engine automatically ^(no Rust, no prebuilt binary^).
+echo The CLI itself is installed and works -- `tandem build` / `tandem start` won't until this is built.
+echo Pick whichever is easier:
+echo   A^) Install Rust from https://rustup.rs then re-run install.bat
+echo   B^) Download tandem-compile.exe from a release, then run:
+echo        set "TANDEM_COMPILE_BIN=C:\path\to\tandem-compile.exe" ^&^& install.bat
+goto path_check
+
+:compile_ok
+echo Tandem compile engine installed at %COMPILE_DEST%
+
 :path_check
-REM 7. Make sure the bin dir is on PATH for future terminals.
+REM 8. Make sure the bin dir is on PATH for future terminals.
 echo.
 echo ";%PATH%;" | find /i ";%BIN_DIR%;" >nul
 if errorlevel 1 (

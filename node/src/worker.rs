@@ -204,7 +204,7 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
                     config,
                     &task.tid,
                     &task.claim_token,
-                    &format!("{e}"),
+                    &e.to_string(),
                 )
                 .await;
             }

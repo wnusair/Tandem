@@ -51,6 +51,30 @@ def now_ts() -> str:
     return str(time.time())
 
 
+def _record_task_terminal(created_at: str, timestamp: str, *, failed: bool) -> None:
+    """Bump the cumulative task-outcome counters. Called once from complete_task
+    and once from fail_task -- the only two places a task reaches a terminal
+    state. Counters are cumulative since the Redis instance was last flushed,
+    not a sliding window; see docs/observability.md."""
+    redis_client.incr("metrics:tasks:terminal:count")
+    redis_client.incr(
+        "metrics:tasks:failed:count" if failed else "metrics:tasks:completed:count"
+    )
+    latency = max(0.0, safe_float(timestamp) - safe_float(created_at))
+    redis_client.incrbyfloat("metrics:tasks:latency:seconds:sum", latency)
+
+
+def get_task_metrics() -> dict[str, int | float]:
+    return {
+        "completed_total": safe_int(redis_client.get("metrics:tasks:completed:count")),
+        "failed_total": safe_int(redis_client.get("metrics:tasks:failed:count")),
+        "terminal_count": safe_int(redis_client.get("metrics:tasks:terminal:count")),
+        "latency_seconds_sum": safe_float(
+            redis_client.get("metrics:tasks:latency:seconds:sum")
+        ),
+    }
+
+
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -214,6 +238,18 @@ def get_job_task_ids(job_id: str) -> list[str]:
 
 def get_all_node_ids() -> list[str]:
     return sorted(decode_list(list(redis_client.smembers("nodes") or [])))
+
+
+def get_queue_depth() -> int:
+    """Tasks sitting in a Redis list waiting to be claimed by a node -- the
+    unassigned pools plus every node's per-node backlog. A task a node has
+    already claimed is popped off its list, so this only counts backlog, not
+    work already in flight."""
+    depth = safe_int(redis_client.llen("tasks:unassigned"))
+    depth += safe_int(redis_client.llen("tasks:unassigned:wasm"))
+    for node_id in get_all_node_ids():
+        depth += safe_int(redis_client.llen(f"node:{node_id}:queue"))
+    return depth
 
 
 def get_node(node_id: str) -> dict[str, str]:
@@ -803,6 +839,7 @@ def complete_task(tid: str, node_id: str, *, result_bytes: bytes) -> dict[str, A
     write_bytes(result_path, result_bytes)
 
     timestamp = now_ts()
+    _record_task_terminal(task.get("created_at", ""), timestamp, failed=False)
     redis_client.hset(
         f"task:{tid}",
         mapping={
@@ -833,6 +870,7 @@ def fail_task(tid: str, node_id: str, *, error_message: str) -> dict[str, Any]:
         raise KeyError(f"Unknown task id: {tid}")
 
     timestamp = now_ts()
+    _record_task_terminal(task.get("created_at", ""), timestamp, failed=True)
     redis_client.hset(
         f"task:{tid}",
         mapping={

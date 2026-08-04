@@ -1,0 +1,9 @@
+[project]
+name = "web-demo"
+runtime = "python"
+version = "0.1.0"
+entry = "app.py"
+
+[build]
+# How Tandem starts the app on each node. It binds $TANDEM_SERVE_SOCKET.
+start = "python3 app.py"

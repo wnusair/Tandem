@@ -1,0 +1,41 @@
+# A Tandem compute node.
+#
+# Unlike docker/Dockerfile.node, this one compiles tandem-node itself in a
+# Linux build stage instead of expecting a host-built release binary copied
+# in. `cargo build` on a Windows host produces a .exe (PE format), which
+# can't run in this Linux container no matter what you name it -- so on
+# Windows the binary has to be compiled inside Docker, where the daemon is
+# always Linux either way (WSL2 under the hood).
+FROM rust:1-slim-bookworm AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY node ./node
+RUN cargo build --release --manifest-path node/Cargo.toml
+
+FROM ubuntu:24.04
+
+# ca-certificates for outbound TLS; bubblewrap to sandbox hosted web apps;
+# python3 + pip + tar so a hosted Python app can run, its bundle unpack, and so
+# apps that `import tandem` have the SDK available.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates bubblewrap python3 python3-pip tar \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make the Tandem SDK importable by hosted apps (they run against the node's
+# system Python inside the sandbox).
+COPY sdk/python-sdk /opt/tandem-sdk
+RUN pip3 install --no-cache-dir --break-system-packages /opt/tandem-sdk
+
+COPY --from=build /src/node/target/release/tandem-node /usr/local/bin/tandem-node
+
+# The node writes its identity (key + state) into the working directory.
+WORKDIR /var/lib/tandem-node
+
+# TANDEM_SERVER_URL and TANDEM_NODE_REGISTRATION_TOKEN come from compose. The
+# node registers itself on first start and then heartbeats + pulls work.
+CMD ["tandem-node"]

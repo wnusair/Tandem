@@ -1,0 +1,12 @@
+# Runs the full check suite (lint, tests, build, e2e -- see checks.yml) on
+# every push and pull request.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml

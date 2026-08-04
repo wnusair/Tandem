@@ -285,34 +285,49 @@ Security notes:
 From the repo root:
 
 ```bash
-tandem start cli/test.toml
+tandem start sdk/python-sdk/examples/tandem.toml
 ```
 
 That command will:
 
 1. inspect the Python entry file,
-2. build the `.wasm` artifacts,
+2. compile it to real `.wasm` artifacts,
 3. create a deployment if needed,
 4. upload the TOML + manifest + wasm files,
 5. wait for node execution,
 6. print the returned results.
 
+(No sample project handy? `tandem init` will walk you through creating one.)
+
 If you want to just create the deployment first:
 
 ```bash
-tandem deploy cli/test.toml
+tandem deploy sdk/python-sdk/examples/tandem.toml
 ```
 
 If you already have a deployment pid and want to reuse it:
 
 ```bash
-tandem start cli/test.toml --pid <deployment-pid>
+tandem start sdk/python-sdk/examples/tandem.toml --pid <deployment-pid>
 ```
 
 If you want to queue the job without waiting:
 
 ```bash
-tandem start cli/test.toml --no-wait
+tandem start sdk/python-sdk/examples/tandem.toml --no-wait
 ```
 
 That prints the `job_token`, status URL, and results URL.
+
+## Current runtime limitation
+
+`tandem build` compiles real Python logic into a real WASM component via
+`tandem-compile` + `componentize-py` -- a successful run means arbitrary
+(pure-Python, no native extensions) task code actually executed on a node, not
+just that the transport pipeline moved bytes around.
+
+One catch specific to `tandem start`: it always invokes every task with no
+arguments, so a task's parameters need defaults (see
+`sdk/python-sdk/examples/compute_example.py`) to run that way. Tasks that
+require real arguments are meant to be called from Python via `.submit()`
+instead.

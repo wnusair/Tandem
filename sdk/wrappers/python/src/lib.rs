@@ -6,6 +6,10 @@
 //! tested together; the full `compile` entry point lands once the language
 //! backends are wired up.
 
+// The #[pyfunction] macro expansion below inserts a same-type conversion that
+// clippy flags as useless; it's generated code, not something we can rewrite.
+#![allow(clippy::useless_conversion)]
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use tandem_core::detect_kind;

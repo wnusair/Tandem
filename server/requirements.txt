@@ -1,6 +1,7 @@
 flask
 flask-redis
 flask-api-key
+Flask-Migrate
 python-dotenv
 Flask-SQLAlchemy
 psycopg2-binary>=2.9

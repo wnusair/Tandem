@@ -21,6 +21,15 @@ tandem settings set-server-url http://127.0.0.1:6767
 tandem auth register --username developer
 ```
 
+### Database migrations
+
+The server uses Flask-Migrate and Alembic to manage database schema changes.
+
+Run migration commands from the `server` directory:
+
+```bash
+python -m flask --app app:create_app db upgrade
+
 ### 3. Write a Task
 Create a file named `tasks.py`:
 ```python

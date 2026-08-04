@@ -5,7 +5,7 @@ import secrets
 from dotenv import load_dotenv
 from flask import Flask
 
-from app.extensions import db, redis_client
+from app.extensions import db, migrate, redis_client
 
 load_dotenv()
 
@@ -95,6 +95,14 @@ def create_app():
     app.config["NODE_REGISTRATION_TOKEN"] = _resolve_node_registration_token(server_dir)
 
     redis_client.init_app(app)
+    db.init_app(app)
+
+    # Load every SQLAlchemy model so Alembic can detect the full schema.
+    import importlib
+
+    importlib.import_module("app.models")
+
+    migrate.init_app(app, db)
 
     # JWT key paths — can be overridden via environment variables
     app.config["JWT_PRIVATE_KEY_PATH"] = os.environ.get(
@@ -127,18 +135,7 @@ def create_app():
     # Desktop/CLI-specific routes (require JWT)
     app.register_blueprint(desktop_bp, url_prefix="/api/v1/desktop")
 
-    with app.app_context():
-        import importlib
-
-        importlib.import_module("app.models")
-
-        db.init_app(app)
-        try:
-            db.create_all()
-        except Exception as e:
-            print("Warning: could not create database tables at startup:", e)
-            # continue without stopping the app; DB may be unavailable locally
-
+    
     # Start the background failover sweeper so work gets reclaimed off dead nodes
     # even when nothing is polling. Skipped during tests and if explicitly turned
     # off (e.g. a one-off management process that shouldn't sweep).

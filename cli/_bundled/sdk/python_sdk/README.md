@@ -140,3 +140,5 @@ this, including how to bundle its dependencies.
 | `tandem sdk list` / `install` / `download` | Browse, install, or copy the Tandem SDK from the server. |
 | `tandem usage` | Show how much of your resource limits you're using. |
 | `tandem clean` | Remove build artifacts. |
+| `tandem node enable` / `disable` | Manage the background node as a 24/7 OS system service. |
+| `tandem uninstall` | Completely uninstall Tandem and its background worker node. |

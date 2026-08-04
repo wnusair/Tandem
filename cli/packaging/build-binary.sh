@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
 #
-# Turn the Tandem Python CLI into a single self-contained executable.
+# Turn the Tandem Python CLI into a self-contained executable.
 #
 #   cli/packaging/build-binary.sh
 #
-# Produces cli/packaging/dist/tandem -- one file that runs `tandem` with no
-# Python, no virtualenv, and no pip install needed on the target machine. That's
-# the whole point: the node is already a single Rust binary, and this makes the
-# CLI a single binary too, so both can be dropped straight into /usr/bin by the
-# installers (see ../../packaging/build-deb.sh).
+# Produces cli/packaging/dist/tandem/ -- a folder holding the `tandem`
+# executable plus everything it needs, with no Python, no virtualenv, and no
+# pip install needed on the target machine. The installers (see
+# ../../packaging/build-deb.sh and build-dmg.sh) drop the whole folder
+# somewhere out of the way and symlink just the executable onto the PATH.
 #
 # We do this with PyInstaller, which walks the CLI's imports, bundles them plus a
-# Python interpreter, and glues it all into one executable for whatever OS you
-# run this on (Linux here, macOS on a Mac, Windows on Windows).
+# Python interpreter, and glues it all into one folder for whatever OS you run
+# this on (Linux here, macOS on a Mac, Windows on Windows).
+#
+# This used to build with --onefile (a single executable) instead of --onedir
+# (a folder). We switched because of a nasty macOS startup delay: our binary is
+# only ad-hoc signed, not notarized, so Gatekeeper does a several-second network
+# scan the first time it sees a given file. --onefile re-extracts itself to a
+# brand-new temp path on every single launch, so that file is "new" to
+# Gatekeeper every time and it re-scans every time, adding 5-10 seconds to every
+# `tandem` command forever. --onedir extracts once, to a stable path, so
+# Gatekeeper scans it once and remembers -- every launch after the first is
+# instant. Same tradeoff doesn't bite on Linux (no Gatekeeper), but there's no
+# reason to keep two different packaging modes for one platform, so onedir it
+# is everywhere.
 
 set -euo pipefail
 
@@ -86,7 +98,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ENTRY_PY
 
-# 5. Bundle it all into one file.
+# 5. Bundle it all into a folder (see the --onedir note up top for why).
 #   --collect-all tandem_cli  pulls in every CLI submodule plus data files like
 #                             dummy.wasm and the bundled SDK.
 #   --collect-all keyring     pulls in keyring and its OS backends, which it
@@ -94,7 +106,7 @@ ENTRY_PY
 #                             just by following imports).
 echo "Bundling the binary with PyInstaller (this takes a minute)..."
 "$VENV_PY" -m PyInstaller \
-  --onefile \
+  --onedir \
   --name tandem \
   --collect-all tandem_cli \
   --collect-all keyring \
@@ -107,7 +119,8 @@ echo "Bundling the binary with PyInstaller (this takes a minute)..."
 # 6. Prove the binary actually runs before we call it done. This catches a whole
 # class of packaging mistakes (a missing dependency, a backend that didn't get
 # bundled) right here instead of on the user's machine.
-BINARY="$DIST_DIR/tandem"
+BUNDLE_DIR="$DIST_DIR/tandem"
+BINARY="$BUNDLE_DIR/tandem"
 echo ""
 echo "Smoke-testing the binary..."
 if ! "$BINARY" -h >/dev/null 2>&1; then
@@ -115,4 +128,4 @@ if ! "$BINARY" -h >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Built $BINARY"
+echo "Built $BUNDLE_DIR"

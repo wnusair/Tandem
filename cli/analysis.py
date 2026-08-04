@@ -271,17 +271,6 @@ def _qualified_name(expr: ast.expr) -> tuple[str, ...]:
     return ()
 
 
-def _format_call_name(call: ast.Call) -> str:
-    qualified = _qualified_name(call.func)
-    if qualified:
-        return ".".join(qualified)
-
-    if isinstance(call.func, ast.Attribute):
-        return call.func.attr
-
-    return type(call.func).__name__
-
-
 def _iter_calls(root: ast.AST) -> list[ast.Call]:
     calls: list[ast.Call] = []
 
@@ -340,9 +329,8 @@ def _immutable_names_for_module(module: ModuleType) -> frozenset[str]:
     import time, keyed by module name, and the SDK exposes them through
     ``all_immutable_names`` precisely so this build-time scanner can tell which
     globals a task is allowed to read. We consult that registry instead of
-    re-deriving it from the AST so every construction form -- ``Immutable(...)``,
-    ``Immutable[T](...)``, ``Immutable.of(...)``, or an explicit
-    ``register_immutable_name(...)`` -- is honoured with one source of truth.
+    re-deriving it from the AST, so any ``tandem.Immutable(...)`` binding is
+    honoured with one source of truth.
 
     The module has already been imported by discovery, so the registry is
     populated by the time we get here. If the SDK can't be imported (e.g. an

@@ -13,7 +13,7 @@ class UsageCommandTests(unittest.TestCase):
     def _run_with_payload(self, payload: dict) -> str:
         args = argparse.Namespace(server_url=None, api_key=None)
         buffer = io.StringIO()
-        with patch("tandem_cli.remote.fetch_usage", return_value=payload):
+        with patch("tandem_cli.commands.fetch_usage", return_value=payload):
             with redirect_stdout(buffer):
                 exit_code = commands._cmd_usage(args)
         self.assertEqual(exit_code, 0)
@@ -24,10 +24,10 @@ class UsageCommandTests(unittest.TestCase):
             "account": {"user_id": 1},
             "resources": [
                 {
-                    "type": "instructions",
+                    "type": "compute",
                     "used": 250,
                     "limit": 1000,
-                    "unit": "fuel",
+                    "unit": "seconds",
                     "percent": 25.0,
                     "source": "measured",
                 },
@@ -44,9 +44,9 @@ class UsageCommandTests(unittest.TestCase):
 
         output = self._run_with_payload(payload)
 
-        self.assertIn("instructions", output)
+        self.assertIn("compute", output)
         self.assertIn("25.0%", output)
-        self.assertIn("fuel", output)
+        self.assertIn("seconds", output)
         # the placeholder metric is labelled and rendered in GiB
         self.assertIn("ram", output)
         self.assertIn("(placeholder)", output)

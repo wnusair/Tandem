@@ -50,6 +50,7 @@ def deploy():
         new_deployment = Deployment()
         new_deployment.name = name
         new_deployment.pid = pid
+        new_deployment.user_id = api_client.user_id
         new_deployment.api_key = api_client.api_key
 
         db.session.add(new_deployment)

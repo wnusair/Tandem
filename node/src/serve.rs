@@ -64,11 +64,12 @@ impl ServedApp {
     }
 }
 
-/// Fork the app in the sandbox WITHOUT waiting for its socket to come up.
+/// Launch a web app in the sandbox and wait for its socket to come up.
 ///
 /// * `work_dir` already contains the unpacked app (its code is at the top).
 /// * `start_command` is what the user told us to run, e.g. `["python3", "app.py"]`.
 /// * `limits` are the resource ceilings (the account's RAM cap, etc.).
+/// Fork the app in the sandbox WITHOUT waiting for its socket to come up.
 ///
 /// Important subtlety: bwrap's `--die-with-parent` ties the app's lifetime to
 /// the *thread* that forked it (Linux `PR_SET_PDEATHSIG` is thread-scoped, not
@@ -102,41 +103,23 @@ pub fn spawn_app(
         ],
         allow_network: false,
         limits,
-        cgroup_parent: None,
     };
 
     let child = spawn_sandboxed(&spec)?;
     Ok(ServedApp { child, socket_path })
 }
 
-/// Launch a web app and block until its socket comes up. Synchronous; used by
-/// tests. The serve loop uses `spawn_app` + `wait_ready` so it can wait
-/// asynchronously without blocking a runtime thread.
-pub fn launch_app(
-    work_dir: &Path,
-    start_command: &[String],
-    node_id: &str,
-    limits: SandboxLimits,
-) -> io::Result<ServedApp> {
-    let mut app = spawn_app(work_dir, start_command, node_id, limits)?;
-    if let Err(err) = wait_until_ready(app.socket_path(), Duration::from_secs(15)) {
-        app.shutdown();
-        return Err(err);
-    }
-    Ok(app)
-}
-
-/// Async twin of `wait_until_ready`: poll for the app's socket without blocking
-/// a runtime thread. The per-attempt connect is a near-instant local syscall;
-/// the wait between attempts yields back to the runtime.
+/// Poll for the app's socket without blocking a runtime thread. The per-attempt
+/// connect is a near-instant local syscall; the wait between attempts yields
+/// back to the runtime.
 async fn wait_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        if socket_path.exists()
-            && let Ok(stream) = UnixStream::connect(socket_path)
-        {
-            drop(stream);
-            return Ok(());
+        if socket_path.exists() {
+            if let Ok(stream) = UnixStream::connect(socket_path) {
+                drop(stream);
+                return Ok(());
+            }
         }
         if Instant::now() >= deadline {
             return Err(io::Error::new(
@@ -145,26 +128,6 @@ async fn wait_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
             ));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-/// Block until the app is accepting connections on its socket, or time out.
-fn wait_until_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if socket_path.exists()
-            && let Ok(stream) = UnixStream::connect(socket_path)
-        {
-            drop(stream);
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "hosted app did not start listening on its socket in time",
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -210,7 +173,7 @@ pub fn proxy_request(
 /// Split a raw HTTP/1.1 response into status, headers, and body.
 fn parse_http_response(raw: &[u8]) -> io::Result<HttpResponse> {
     // Find the blank line that separates headers from the body.
-    let split_at = find_subslice(raw, b"\r\n\r\n").ok_or_else(|| {
+    let split_at = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidData, "malformed HTTP response from app")
     })?;
     let head = &raw[..split_at];
@@ -243,16 +206,6 @@ fn parse_status_code(status_line: &str) -> io::Result<u16> {
     let code = parts.next().unwrap_or("");
     code.parse::<u16>()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad HTTP status line from app"))
-}
-
-/// Find the first index where `needle` appears in `haystack`.
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +428,10 @@ async fn setup_app(
                 .arg(&work_dir)
                 .status()?;
             if !status.success() {
-                return Err(io::Error::other("could not unpack the app bundle"));
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "could not unpack the app bundle",
+                ));
             }
             let _ = fs::remove_file(&tar_path);
             Ok(())
@@ -645,8 +601,8 @@ except FileNotFoundError:
 UnixHTTPServer(SOCK, Handler).serve_forever()
 "#;
 
-    #[test]
-    fn hosts_an_app_in_the_sandbox_and_proxies_a_request() {
+    #[tokio::test]
+    async fn hosts_an_app_in_the_sandbox_and_proxies_a_request() {
         if !bwrap_available() {
             return; // sandbox not available on this machine; skip
         }
@@ -656,10 +612,14 @@ UnixHTTPServer(SOCK, Handler).serve_forever()
         std::fs::write(work.join("app.py"), SAMPLE_APP).unwrap();
 
         let start = vec!["python3".to_string(), "app.py".to_string()];
-        let mut app = match launch_app(&work, &start, "test-node", SandboxLimits::default()) {
+        let mut app = match spawn_app(&work, &start, "test-node", SandboxLimits::default()) {
             Ok(app) => app,
             Err(_) => return, // no python3 in the sandbox on this machine; skip
         };
+        if wait_ready(app.socket_path(), Duration::from_secs(15)).await.is_err() {
+            app.shutdown();
+            return; // app didn't come up in time; skip
+        }
 
         let response = proxy_request(app.socket_path(), "GET", "/", &[], b"")
             .expect("proxy request should succeed");

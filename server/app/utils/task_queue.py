@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
+import math
 import os
 import pathlib
 import secrets
@@ -85,6 +87,18 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def billed_seconds(task: dict[str, str]) -> int:
+    """Whole seconds the server watched this task occupy a node, floored at 1.
+
+    We charge quota against this instead of anything the node hands us. Both the
+    claim stamp and "now" come from our own clock (see claim_task_for_node and
+    complete_task), so a node can't shrink or pad the number. If a task somehow
+    finished without a claim stamp we fall back to when it was created.
+    """
+    start = safe_float(task.get("claimed_at") or task.get("created_at"), time.time())
+    return max(1, math.ceil(time.time() - start))
 
 
 def compare_token(expected: str | None, provided: str | None) -> bool:
@@ -317,10 +331,10 @@ def select_least_loaded_node(available_nodes: list[str], pending: dict[str, int]
     We count both the tasks already sitting in a node's Redis queue and the ones
     we've assigned so far in this same planning pass (tracked in `pending`), so a
     burst of tasks in one job spreads out across nodes instead of piling onto
-    whoever happened to be shortest when we started. Assignment stays per-node
-    (not a shared pull queue) on purpose: each task's key is wrapped to its
-    node's public key at creation time, and that's what keeps the server from
-    being able to read task payloads.
+    whoever happened to be shortest when we started. The task's DEK is wrapped
+    to every registered node's public key at creation time, so any node can run
+    it after a failover while the server (holding no private keys) still can't
+    read the payload.
     """
 
     def load(node_id: str) -> int:
@@ -348,25 +362,25 @@ def create_task(
     timeout_ms: int | None = None,
     shard_index: int | None = None,
     shard_total: int | None = None,
+    verify_group: str = "",
+    verify_replica: bool = False,
 ) -> str:
     tid = generate_tid()
     timestamp = now_ts()
     blob_path = task_blob_path(job_id, tid, filename)
-    write_bytes(blob_path, payload)
 
     # --- Encrypt task payload at rest with AES-256-GCM ---
     dek = os.urandom(32)
     iv = os.urandom(12)
     ciphertext = AESGCM(dek).encrypt(iv, payload, None)
-    # Overwrite plaintext on disk so it never lingers
-    write_bytes(blob_path, ciphertext)
 
-    if assigned_node:
-        node_key_row = NodePublicKey.query.filter_by(node_id=assigned_node).first()
-    else:
-        node_key_row = None
-
-    if node_key_row is not None:
+    # Wrap the DEK for EVERY node that has registered a public key, not just the
+    # one we happened to assign this task to. Failover can move a task to any
+    # healthy node, and each node can only unwrap a DEK that was encrypted to its
+    # own public key -- pinning the key to a single node meant every failover
+    # produced a job nobody could decrypt. One wrapped copy per node fixes that.
+    wrapped_any = False
+    for node_key_row in NodePublicKey.query.all():
         try:
             public_key = serialization.load_pem_public_key(
                 node_key_row.rsa_public_key_pem.encode("utf-8")
@@ -379,31 +393,39 @@ def create_task(
                     label=None,
                 ),
             )
-            enc_key_row = TaskEncryptionKey(
-                tid=tid,
-                job_id=job_id,
-                encrypted_dek_b64=base64.b64encode(encrypted_dek).decode("ascii"),
-                iv_b64=base64.b64encode(iv).decode("ascii"),
-                target_node_id=assigned_node,
+            db.session.add(
+                TaskEncryptionKey(
+                    tid=tid,
+                    job_id=job_id,
+                    encrypted_dek_b64=base64.b64encode(encrypted_dek).decode("ascii"),
+                    iv_b64=base64.b64encode(iv).decode("ascii"),
+                    target_node_id=node_key_row.node_id,
+                )
             )
-            db.session.add(enc_key_row)
-            db.session.commit()
+            wrapped_any = True
         except Exception:
             logger.warning(
-                "Failed to RSA-encrypt DEK for task %s / node %s – "
-                "task will be stored encrypted but key row was not saved",
+                "Failed to RSA-wrap DEK for task %s / node %s – skipping that node",
                 tid,
-                assigned_node,
+                node_key_row.node_id,
                 exc_info=True,
             )
+
+    if wrapped_any:
+        db.session.commit()
+        # Only the encrypted bytes ever touch disk once we know some node can
+        # unwrap them.
+        write_bytes(blob_path, ciphertext)
     else:
-        if assigned_node:
-            logger.warning(
-                "Node %s has no registered RSA public key – "
-                "task %s payload encrypted with AES but DEK is not wrapped",
-                assigned_node,
-                tid,
-            )
+        # Nobody has a registered public key, so an encrypted blob would be
+        # undecryptable by everyone. Store the payload as-is and let the node
+        # run it in the clear (the node treats a blob with no DEK header as
+        # plaintext).
+        logger.warning(
+            "No registered node public keys – storing task %s payload unencrypted",
+            tid,
+        )
+        write_bytes(blob_path, payload)
 
     redis_client.hset(
         f"task:{tid}",
@@ -422,6 +444,7 @@ def create_task(
             "assigned_node": assigned_node or "",
             "blob_path": str(blob_path),
             "result_path": "",
+            "output_hash": "",
             "error": "",
             "claim_token": "",
             "download_token": "",
@@ -430,13 +453,25 @@ def create_task(
             "claimed_at": "",
             "completed_at": "",
             "lease_expires_at": "",
+            "verify_group": verify_group,
+            "verify_replica": "1" if verify_replica else "",
+            "verify_status": "",
         },
     )
 
     # TTL so task keys don't accumulate forever
     redis_client.expire(f"task:{tid}", 86400)
 
-    redis_client.rpush(f"job:{job_id}:tasks", tid)
+    if verify_group:
+        # Every copy joins the group so we can line their results up later.
+        redis_client.sadd(f"verify:{verify_group}:members", tid)
+        redis_client.expire(f"verify:{verify_group}:members", 86400)
+
+    if not verify_replica:
+        # A replica is a shadow copy we run purely to check somebody else's
+        # work, so it stays out of the job's task list -- the client should
+        # still see one result per task it asked for, not N.
+        redis_client.rpush(f"job:{job_id}:tasks", tid)
 
     if assigned_node:
         redis_client.rpush(f"node:{assigned_node}:queue", tid)
@@ -444,6 +479,67 @@ def create_task(
         redis_client.rpush(_unassigned_queue_key(runtime), tid)
 
     return tid
+
+
+def nodes_holding_task_key(tid: str) -> set[str]:
+    """Node ids that hold a wrapped copy of this task's DEK.
+
+    An empty set means the task isn't encrypted (no wrapped keys), so any node
+    can run it. Otherwise only these nodes can actually decrypt the payload.
+    """
+    rows = TaskEncryptionKey.query.filter_by(tid=tid).all()
+    return {row.target_node_id for row in rows}
+
+
+def decryptable_destinations(tid: str, candidates: list[str]) -> list[str]:
+    """Narrow a list of candidate nodes to ones that can decrypt this task.
+
+    If the task isn't encrypted we leave the candidates untouched. This keeps
+    failover from handing an encrypted task to a node that has no wrapped DEK
+    copy and would just fail to decrypt it.
+    """
+    holders = nodes_holding_task_key(tid)
+    if not holders:
+        return candidates
+    return [node_id for node_id in candidates if node_id in holders]
+
+
+def group_member_ids(verify_group: str) -> list[str]:
+    """Every task id in a verification group: the real task plus its replicas."""
+    if not verify_group:
+        return []
+    members = redis_client.smembers(f"verify:{verify_group}:members") or []
+    return sorted(decode_list(list(members)))
+
+
+def nodes_running_group_siblings(tid: str) -> set[str]:
+    """Nodes already holding another copy of this task's verification group."""
+    task = get_task(tid)
+    siblings: set[str] = set()
+
+    for member_tid in group_member_ids(task.get("verify_group") or ""):
+        if member_tid == tid:
+            continue
+
+        member = get_task(member_tid)
+        assigned = (member.get("assigned_node") or "").strip()
+        if assigned:
+            siblings.add(assigned)
+
+    return siblings
+
+
+def exclude_group_siblings(tid: str, candidates: list[str]) -> list[str]:
+    """Keep a copy that's failing over away from nodes running a sibling copy.
+
+    The whole point of running a task on N nodes is that N *different* nodes do
+    the work. If failover handed one copy to a node that already has another,
+    a dishonest node would end up agreeing with itself and the check would pass.
+    """
+    siblings = nodes_running_group_siblings(tid)
+    if not siblings:
+        return candidates
+    return [node_id for node_id in candidates if node_id not in siblings]
 
 
 def requeue_task(tid: str, assigned_node: str | None) -> None:
@@ -495,10 +591,35 @@ def requeue_stale_tasks() -> None:
         healthy_destinations = get_healthy_node_ids(
             exclude=node_id, required_runtime=task_runtime
         )
+        healthy_destinations = decryptable_destinations(current_tid, healthy_destinations)
+        healthy_destinations = exclude_group_siblings(current_tid, healthy_destinations)
         destination = healthy_destinations[0] if healthy_destinations else None
 
         requeue_task(current_tid, destination)
         redis_client.hset(f"node:{node_id}", mapping={"current_task": ""})
+
+
+def drain_node_queue(node_id: str) -> None:
+    """Hand everything still waiting in one node's queue to somebody else."""
+    queue_key = f"node:{node_id}:queue"
+
+    while True:
+        raw_tid = redis_client.lpop(queue_key)
+        if raw_tid is None:
+            break
+
+        tid = str(decode_value(raw_tid))
+        task = get_task(tid)
+        # Only re-home work that's still waiting to run; anything already
+        # finished or failed can be left where it is.
+        if not task or task.get("status") not in {"queued", "claimed", "running"}:
+            continue
+
+        runtime = task.get("runtime") or "cloudpickle"
+        destinations = get_healthy_node_ids(exclude=node_id, required_runtime=runtime)
+        destinations = decryptable_destinations(tid, destinations)
+        destinations = exclude_group_siblings(tid, destinations)
+        requeue_task(tid, destinations[0] if destinations else None)
 
 
 def drain_dead_node_queues() -> None:
@@ -516,22 +637,7 @@ def drain_dead_node_queues() -> None:
         if not node or is_node_healthy(node, now=current):
             continue
 
-        queue_key = f"node:{node_id}:queue"
-        while True:
-            raw_tid = redis_client.lpop(queue_key)
-            if raw_tid is None:
-                break
-
-            tid = str(decode_value(raw_tid))
-            task = get_task(tid)
-            # Only re-home work that's still waiting to run; anything already
-            # finished or failed can be left where it is.
-            if not task or task.get("status") not in {"queued", "claimed", "running"}:
-                continue
-
-            runtime = task.get("runtime") or "cloudpickle"
-            destinations = get_healthy_node_ids(exclude=node_id, required_runtime=runtime)
-            requeue_task(tid, destinations[0] if destinations else None)
+        drain_node_queue(node_id)
 
 
 def sweep_stale_work() -> None:
@@ -615,6 +721,20 @@ def claim_task_for_node(node_id: str) -> dict[str, str] | None:
         requeue_task(tid, None)
         return None
 
+    # Don't hand an encrypted task off the unassigned queue to a node that has
+    # no wrapped DEK copy (e.g. one that registered after the task was created)
+    # -- it could download the blob but never decrypt it.
+    holders = nodes_holding_task_key(tid)
+    if holders and node_id not in holders:
+        requeue_task(tid, None)
+        return None
+
+    # Same idea for verification replicas: one node must never end up running
+    # two copies of the same task, or it would just be checking its own work.
+    if node_id in nodes_running_group_siblings(tid):
+        requeue_task(tid, None)
+        return None
+
     claim_token = generate_token()
     download_token = generate_token()
     current = time.time()
@@ -670,6 +790,46 @@ def extend_task_lease(node_id: str) -> None:
     )
 
 
+def delete_task_keys(tid: str) -> None:
+    """Drop all wrapped DEK copies for a task once it's reached a terminal state.
+
+    We keep every node's copy around while the task is still runnable so it can
+    fail over; only when it's done (or failed for good) do we clear them.
+    """
+    try:
+        TaskEncryptionKey.query.filter_by(tid=tid).delete()
+        db.session.commit()
+    except Exception:
+        logger.warning("Failed to delete encryption keys for task %s", tid, exc_info=True)
+
+
+def settled_status(task: dict[str, str], terminal_status: str) -> str:
+    """Where a task lands once the node running it reports back.
+
+    Usually that's just the terminal status it earned. But the task the client
+    actually reads sits in `verifying` while the rest of its group finishes,
+    because until we've compared the copies we don't know whether to trust this
+    answer -- and that pause is what lets us repair a bad one before anybody
+    sees it. Replicas settle normally; nothing is reading them.
+    """
+    if task.get("verify_group") and not _flag_enabled(task.get("verify_replica")):
+        return "verifying"
+    return terminal_status
+
+
+def release_task_payload(tid: str, task: dict[str, str]) -> None:
+    """Drop the encrypted payload and its wrapped keys now the task is done.
+
+    A task in a verification group holds on to both until the whole group
+    settles, since the comparison may still need them.
+    """
+    if task.get("verify_group"):
+        return
+
+    remove_file(task.get("blob_path"))
+    delete_task_keys(tid)
+
+
 def complete_task(tid: str, node_id: str, *, result_bytes: bytes) -> dict[str, Any]:
     task = get_task(tid)
     if not task:
@@ -683,8 +843,11 @@ def complete_task(tid: str, node_id: str, *, result_bytes: bytes) -> dict[str, A
     redis_client.hset(
         f"task:{tid}",
         mapping={
-            "status": "completed",
+            "status": settled_status(task, "completed"),
             "result_path": str(result_path),
+            # The same digest the execution receipt carries, kept around so a
+            # verification group can compare copies without re-reading blobs.
+            "output_hash": hashlib.sha256(result_bytes).hexdigest(),
             "error": "",
             "claim_token": "",
             "download_token": "",
@@ -697,7 +860,7 @@ def complete_task(tid: str, node_id: str, *, result_bytes: bytes) -> dict[str, A
         f"node:{node_id}", mapping={"current_task": "", "last_seen": timestamp}
     )
 
-    remove_file(task.get("blob_path"))
+    release_task_payload(tid, task)
     return refresh_job_status(task["job_id"])
 
 
@@ -711,7 +874,7 @@ def fail_task(tid: str, node_id: str, *, error_message: str) -> dict[str, Any]:
     redis_client.hset(
         f"task:{tid}",
         mapping={
-            "status": "failed",
+            "status": settled_status(task, "failed"),
             "error": error_message,
             "claim_token": "",
             "download_token": "",
@@ -724,7 +887,7 @@ def fail_task(tid: str, node_id: str, *, error_message: str) -> dict[str, Any]:
         f"node:{node_id}", mapping={"current_task": "", "last_seen": timestamp}
     )
 
-    remove_file(task.get("blob_path"))
+    release_task_payload(tid, task)
     return refresh_job_status(task["job_id"])
 
 
@@ -747,6 +910,12 @@ def _task_summary(task: dict[str, str], tid: str) -> dict[str, Any]:
     if shard_total > 1:
         item["shard_index"] = safe_int(task.get("shard_index"))
         item["shard_total"] = shard_total
+
+    # Only tasks we actually ran redundantly carry a verdict, so leave the field
+    # off entirely for everything else rather than reporting an empty string.
+    verify_status = task.get("verify_status") or ""
+    if verify_status:
+        item["verify_status"] = verify_status
 
     return item
 
@@ -781,7 +950,9 @@ def refresh_job_status(job_id: str) -> dict[str, Any]:
         overall_status = "failed"
     elif done:
         overall_status = "completed"
-    elif counts["running"] or counts["claimed"]:
+    elif counts["running"] or counts["claimed"] or counts.get("verifying"):
+        # A task waiting on its verification group has already run, but the job
+        # isn't finished until we know the answer holds up.
         overall_status = "running"
     else:
         overall_status = "queued"

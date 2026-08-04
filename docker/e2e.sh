@@ -18,11 +18,11 @@ done
 
 say "register + login"
 # Register may 409 on a re-run; that's fine, we just need to log in afterwards.
-curl -s -o /dev/null -X POST "$SERVER/api/v1/register" \
+curl -s -o /dev/null -X POST "$SERVER/api/v1/auth/register" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" || true
 
-API_KEY="$(curl -sf -X POST "$SERVER/api/v1/login" \
+API_KEY="$(curl -sf -X POST "$SERVER/api/v1/auth/login" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" \
   | python3 -c 'import sys, json; print(json.load(sys.stdin)["api_key"])')"

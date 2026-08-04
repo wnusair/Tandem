@@ -56,13 +56,12 @@ def _response_key(req_id: str) -> str:
     return f"serve:resp:{req_id}"
 
 
-def create_serve_deployment(pid: str, *, start_command: list[str], replicas: int, api_key: str) -> None:
+def create_serve_deployment(pid: str, *, start_command: list[str], replicas: int) -> None:
     redis_client.hset(
         _deploy_key(pid),
         mapping={
             "start_command": json.dumps(start_command),
             "replicas": str(replicas),
-            "api_key": api_key,
             "status": "running",
             "created_at": str(time.time()),
         },

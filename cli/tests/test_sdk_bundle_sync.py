@@ -12,7 +12,6 @@ _TRACKED_FILES = (
     "pyproject.toml",
     "README.md",
     "tandem/__init__.py",
-    "tandem/builder.py",
     "tandem/compute.py",
     "tandem/discovery.py",
     "tandem/errors.py",

@@ -13,7 +13,7 @@ These rules dictate how code should be written, styled, and committed in this re
 ## 3. Git Workflow
 - Periodically stage changes (`git add`) and commit every hundred lines or so (or after small, logical milestones). Do not build up massive changes for a single commit.
 - Write commit messages that sound human (e.g., "added basic flask app with tandem task", "fix dummy wasm fallback"). Keep them concise, simple, and casual. Nothing fancy or too long, and definitely no robotic, overly detailed automated formats.
-- Never push, always only add and commit. NEVER PUSH.
+- Never push, always only add and commit. NEVER PUSH. This is also the same for documentation.
 
 ## 4. Running
 - The way tandem is to be installed and ran is through running install.sh and install.bat on the device and having the node and cli all installed and added to path.
@@ -23,4 +23,8 @@ These rules dictate how code should be written, styled, and committed in this re
 - Make sure that whenever you are making changes, you actually test them comprehensivly in a manner that is similar to production. dont create a bunch of junk files iwthout deleting them.
 - Make sure your changes work via tests similar to production, and then delete any testing files needed.
 
+IMPORTANT, VERY IMPORTANT: NEVER ADD YOURSELF AS A CONTRIBUTOR TO A COMMIT OR COAUTHOR. NEVER.
+IMPORTANT, VERY IMPORTANT: NEVER ADD YOURSELF AS A CONTRIBUTOR TO A COMMIT OR COAUTHOR. NEVER.
+IMPORTANT, VERY IMPORTANT: NEVER ADD YOURSELF AS A CONTRIBUTOR TO A COMMIT OR COAUTHOR. NEVER.
+IMPORTANT, VERY IMPORTANT: NEVER ADD YOURSELF AS A CONTRIBUTOR TO A COMMIT OR COAUTHOR. NEVER.
 IMPORTANT, VERY IMPORTANT: NEVER ADD YOURSELF AS A CONTRIBUTOR TO A COMMIT OR COAUTHOR. NEVER.

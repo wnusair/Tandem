@@ -28,6 +28,10 @@ target
 .venv/
 __pycache__/
 
+#IDE Pyslop
+.vscode
+.zed
+
 # Node modules
 node_modules/
 /.pnp
@@ -36,6 +40,8 @@ node_modules/
 # Testing & build
 /coverage
 /build
+cli/build
+cli/tandem_cli.egg-info
 /frontend/build/
 
 # Environment variables

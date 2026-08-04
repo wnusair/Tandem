@@ -29,22 +29,6 @@ class ProjectConfig:
     build_install: str | None = None
     build_start: str | None = None
 
-    def as_dict(self) -> dict[str, str | None]:
-        return {
-            "config_path": str(self.config_path),
-            "project_root": str(self.project_root),
-            "name": self.name,
-            "runtime": self.runtime,
-            "version": str(self.version),
-            "entry_path": str(self.entry_path),
-            "output_dir": str(self.output_dir),
-            "sdk_path": str(self.sdk_path) if self.sdk_path is not None else None,
-            "sdk_package_name": self.sdk_package_name,
-            "sdk_import_name": self.sdk_import_name,
-            "build_install": self.build_install,
-            "build_start": self.build_start,
-        }
-
 
 def _require_table(data: dict[str, Any], key: str) -> dict[str, Any]:
     value = data.get(key)

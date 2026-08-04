@@ -70,8 +70,8 @@ fi
 # change when you actually recompile them -- the CLI's Python changes often, so we
 # always rebuild it here. Reusing a leftover executable from a previous run would
 # silently ship stale CLI code in the package. Its own script turns the Python
-# package into a single executable.
-CLI_BINARY="$CLI_DIR/packaging/dist/tandem"
+# package into a folder holding the `tandem` executable and its dependencies.
+CLI_BUNDLE_DIR="$CLI_DIR/packaging/dist/tandem"
 echo "Building the CLI binary..."
 bash "$CLI_DIR/packaging/build-binary.sh"
 
@@ -83,8 +83,15 @@ trap 'rm -rf "$STAGING"' EXIT
 
 mkdir -p "$STAGING/DEBIAN"
 mkdir -p "$STAGING/usr/bin"
+mkdir -p "$STAGING/usr/lib/tandem-cli"
 
-install -m 0755 "$CLI_BINARY" "$STAGING/usr/bin/tandem"
+# The CLI ships as a folder (see build-binary.sh for why it's --onedir, not a
+# single file), so it goes under /usr/lib and gets a symlink on the PATH --
+# same pattern dpkg itself uses for anything that isn't one lone binary.
+cp -R "$CLI_BUNDLE_DIR/." "$STAGING/usr/lib/tandem-cli/"
+chmod 0755 "$STAGING/usr/lib/tandem-cli/tandem"
+ln -s ../lib/tandem-cli/tandem "$STAGING/usr/bin/tandem"
+
 install -m 0755 "$NODE_BINARY" "$STAGING/usr/bin/tandem-node"
 install -m 0755 "$COMPILE_BINARY" "$STAGING/usr/bin/tandem-compile"
 

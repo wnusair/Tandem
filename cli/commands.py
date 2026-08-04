@@ -41,6 +41,7 @@ from .node_service import (
     enable_service,
     get_status,
     is_registered,
+    load_identity,
     node_is_running,
     register_node_now,
     resolve_node_server_url,
@@ -49,7 +50,15 @@ from .node_service import (
     stop_node,
     tail_log,
 )
-from .remote import deploy_project, fetch_job_results, start_project
+from .remote import (
+    deploy_project,
+    fetch_job_results,
+    fetch_usage,
+    serve_deploy,
+    serve_list,
+    serve_stop,
+    start_project,
+)
 from .uninstall import perform_uninstall
 from .sdk_commands import (
     download_sdk,
@@ -109,16 +118,6 @@ def _add_auth_options(
         "--password",
         default=None,
         help="Password for the Tandem account. Prefer omitting this flag so the CLI can prompt securely.",
-    )
-    parser.add_argument(
-        "--env-file",
-        default=".env",
-        help="Path to the env file where TANDEM_SERVER_URL and TANDEM_API_KEY should be stored. Defaults to .env in the current directory.",
-    )
-    parser.add_argument(
-        "--no-store",
-        action="store_true",
-        help="Do not persist TANDEM_SERVER_URL or TANDEM_API_KEY to an env file.",
     )
     parser.add_argument(
         "--show-api-key",
@@ -660,6 +659,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Completely remove Tandem from this machine (asks you to confirm a code).",
     )
 
+    # Each leaf sub-command runs one function. The sub-command groups are all
+    # required, so parse_args() always lands on exactly one of these and main()
+    # can just call args.func. Listing them here keeps every command next to the
+    # handler that runs it.
+    init_parser.set_defaults(func=_cmd_init)
+    inspect_parser.set_defaults(func=_cmd_inspect)
+    manifest_parser.set_defaults(func=_cmd_manifest)
+    build_parser.set_defaults(func=_cmd_build)
+    auth_register_parser.set_defaults(func=_cmd_auth_register)
+    auth_login_parser.set_defaults(func=_cmd_auth_login)
+    auth_logout_parser.set_defaults(func=_cmd_auth_logout)
+    auth_subparsers.choices["status"].set_defaults(func=_cmd_auth_status)
+    settings_subparsers.choices["show"].set_defaults(func=_cmd_settings_show)
+    settings_set_server_url_parser.set_defaults(func=_cmd_settings_set_server_url)
+    settings_subparsers.choices["reset-server-url"].set_defaults(func=_cmd_settings_reset_server_url)
+    settings_set_registration_token_parser.set_defaults(func=_cmd_settings_set_registration_token)
+    settings_subparsers.choices["reset-registration-token"].set_defaults(func=_cmd_settings_reset_registration_token)
+    sdk_subparsers.choices["list"].set_defaults(func=_cmd_sdk_list)
+    sdk_install_parser.set_defaults(func=_cmd_sdk_install)
+    sdk_download_parser.set_defaults(func=_cmd_sdk_download)
+    deploy_parser.set_defaults(func=_cmd_deploy)
+    start_parser.set_defaults(func=_cmd_start)
+    clean_parser.set_defaults(func=_cmd_clean)
+    subparsers.choices["status"].set_defaults(func=_cmd_status)
+    usage_parser.set_defaults(func=_cmd_usage)
+    serve_parser.set_defaults(func=_cmd_serve)
+    node_start_parser.set_defaults(func=_cmd_node_start)
+    node_subparsers.choices["stop"].set_defaults(func=_cmd_node_stop)
+    node_restart_parser.set_defaults(func=_cmd_node_restart)
+    node_subparsers.choices["status"].set_defaults(func=_cmd_node_status)
+    node_logs_parser.set_defaults(func=_cmd_node_logs)
+    node_enable_parser.set_defaults(func=_cmd_node_enable)
+    node_subparsers.choices["disable"].set_defaults(func=_cmd_node_disable)
+    subparsers.choices["uninstall"].set_defaults(func=_cmd_uninstall)
+
     return parser
 
 
@@ -750,7 +784,6 @@ def _print_auth_result(
     action: str,
     username: str,
     api_key: str,
-    env_path: Path | None,
     show_api_key: bool,
 ) -> None:
     print(f"{action} user: {username}")
@@ -779,7 +812,6 @@ def _cmd_auth_register(args: argparse.Namespace) -> int:
         action="Registered",
         username=session.username,
         api_key=session.api_key,
-        env_path=None,
         show_api_key=getattr(args, 'show_api_key', False),
     )
     return 0
@@ -802,7 +834,6 @@ def _cmd_auth_login(args: argparse.Namespace) -> int:
         action="Authenticated",
         username=session.username,
         api_key=session.api_key,
-        env_path=None,
         show_api_key=getattr(args, 'show_api_key', False),
     )
     return 0
@@ -1010,6 +1041,7 @@ def _print_node_status() -> None:
 
     if status.node_id:
         print(f"  Node ID:  {status.node_id}")
+        _print_node_specs(status)
     else:
         print("  Not registered yet -- it registers the first time you start it.")
 
@@ -1030,6 +1062,39 @@ def _print_node_status() -> None:
         print("  Not logged in. Run `tandem auth login`, then `tandem node start`.")
 
 
+def _print_node_specs(status) -> None:
+    """Ask the server for this node's hardware specs and print them.
+
+    Best effort: if the server can't be reached, or this node registered
+    before specs reporting existed, we just skip the lines instead of
+    failing `tandem status` over it.
+    """
+    identity = load_identity() or {}
+    node_token = identity.get("node_token")
+    if not status.server_url or not node_token:
+        return
+
+    from .remote import fetch_node_specs
+
+    try:
+        specs = fetch_node_specs(
+            server_url=status.server_url, node_id=status.node_id, node_token=node_token
+        )
+    except Exception:
+        return
+
+    cpu_name = specs.get("cpu_name")
+    if cpu_name:
+        cores = specs.get("cpu_cores")
+        mhz = specs.get("cpu_mhz")
+        extra = f" ({cores} cores @ {mhz} MHz)" if cores and mhz else ""
+        print(f"  CPU:      {cpu_name}{extra}")
+
+    memory_mb = specs.get("memory_mb")
+    if memory_mb:
+        print(f"  Memory:   {memory_mb:,} MB")
+
+
 def _cmd_status(_args: argparse.Namespace) -> int:
     session = load_auth_session()
     if session is None:
@@ -1044,15 +1109,15 @@ def _cmd_status(_args: argparse.Namespace) -> int:
 
 
 def _fmt_amount(value, unit: str) -> str:
-    """Format a usage amount for humans: GiB for bytes, commas for fuel."""
+    """Format a usage amount for humans: GiB for bytes, commas for seconds."""
     try:
         number = float(value)
     except (TypeError, ValueError):
         return f"{value} {unit}"
     if unit == "bytes":
         return f"{number / (2 ** 30):.2f} GiB"
-    if unit == "fuel":
-        return f"{int(number):,} fuel"
+    if unit == "seconds":
+        return f"{int(number):,} seconds"
     return f"{number:g} {unit}"
 
 
@@ -1073,8 +1138,6 @@ def _print_usage_bar(metric: dict) -> None:
 
 
 def _cmd_usage(args: argparse.Namespace) -> int:
-    from .remote import fetch_usage
-
     payload = fetch_usage(
         server_url=getattr(args, "server_url", None),
         api_key=getattr(args, "api_key", None),
@@ -1098,8 +1161,6 @@ def _cmd_usage(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve_list(args: argparse.Namespace) -> int:
-    from .remote import serve_list
-
     data = serve_list(
         server_url=getattr(args, "server_url", None),
         api_key=getattr(args, "api_key", None),
@@ -1118,8 +1179,6 @@ def _cmd_serve_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve_stop(args: argparse.Namespace, pid: str) -> int:
-    from .remote import serve_stop
-
     serve_stop(
         pid=pid,
         server_url=getattr(args, "server_url", None),
@@ -1130,9 +1189,6 @@ def _cmd_serve_stop(args: argparse.Namespace, pid: str) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
-    from .app_config import load_project_config
-    from .remote import serve_deploy
-
     # `serve` doubles as a small management command:
     #   tandem serve [config.toml]   -> deploy (default)
     #   tandem serve stop <pid>      -> stop a running deployment
@@ -1425,74 +1481,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "init":
-            return _cmd_init(args)
-        if args.command == "inspect":
-            return _cmd_inspect(args)
-        if args.command == "manifest":
-            return _cmd_manifest(args)
-        if args.command == "build":
-            return _cmd_build(args)
-        if args.command == "auth":
-            if args.auth_command == "register":
-                return _cmd_auth_register(args)
-            if args.auth_command == "login":
-                return _cmd_auth_login(args)
-            if args.auth_command == "logout":
-                return _cmd_auth_logout(args)
-            if args.auth_command == "status":
-                return _cmd_auth_status(args)
-            parser.error(f"Unknown auth command: {args.auth_command}")
-        if args.command == "settings":
-            if args.settings_command == "show":
-                return _cmd_settings_show(args)
-            if args.settings_command == "set-server-url":
-                return _cmd_settings_set_server_url(args)
-            if args.settings_command == "reset-server-url":
-                return _cmd_settings_reset_server_url(args)
-            if args.settings_command == "set-registration-token":
-                return _cmd_settings_set_registration_token(args)
-            if args.settings_command == "reset-registration-token":
-                return _cmd_settings_reset_registration_token(args)
-            parser.error(f"Unknown settings command: {args.settings_command}")
-        if args.command == "sdk":
-            if args.sdk_command == "list":
-                return _cmd_sdk_list(args)
-            if args.sdk_command == "install":
-                return _cmd_sdk_install(args)
-            if args.sdk_command == "download":
-                return _cmd_sdk_download(args)
-            parser.error(f"Unknown sdk command: {args.sdk_command}")
-        if args.command == "deploy":
-            return _cmd_deploy(args)
-        if args.command == "start":
-            return _cmd_start(args)
-        if args.command == "clean":
-            return _cmd_clean(args)
-        if args.command == "status":
-            return _cmd_status(args)
-        if args.command == "usage":
-            return _cmd_usage(args)
-        if args.command == "serve":
-            return _cmd_serve(args)
-        if args.command == "node":
-            if args.node_command == "start":
-                return _cmd_node_start(args)
-            if args.node_command == "stop":
-                return _cmd_node_stop(args)
-            if args.node_command == "restart":
-                return _cmd_node_restart(args)
-            if args.node_command == "status":
-                return _cmd_node_status(args)
-            if args.node_command == "logs":
-                return _cmd_node_logs(args)
-            if args.node_command == "enable":
-                return _cmd_node_enable(args)
-            if args.node_command == "disable":
-                return _cmd_node_disable(args)
-            parser.error(f"Unknown node command: {args.node_command}")
-        if args.command == "uninstall":
-            return _cmd_uninstall(args)
+        return args.func(args)
     except requests.exceptions.ConnectionError as exc:
         url = getattr(getattr(exc, "request", None), "url", None)
         where = f" at {url}" if url else ""
@@ -1515,6 +1504,3 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-
-    parser.error(f"Unknown command: {args.command}")
-    return 2

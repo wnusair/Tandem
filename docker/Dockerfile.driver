@@ -30,7 +30,6 @@ ENV TANDEM_SKIP_NODE_CHECK=1
 
 COPY docker/sample /opt/tandem/sample
 COPY docker/sample-serve /opt/tandem/sample-serve
-COPY sdk/python-sdk/examples /opt/tandem/examples
 COPY docker/e2e.sh /opt/tandem/e2e.sh
 RUN chmod +x /opt/tandem/e2e.sh
 

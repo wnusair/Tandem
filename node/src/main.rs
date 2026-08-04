@@ -16,7 +16,6 @@ mod state;
 mod worker;
 
 use std::env;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use config::NodeConfig;
 use state::NodeState;
@@ -143,16 +142,9 @@ async fn shutdown_signal() {
 /// again. A failure here is only a warning — the node can still run this
 /// session, it just won't remember who it is next time.
 fn persist_identity(cfg: &NodeConfig) {
-    let registered_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
     let saved = NodeState {
         node_id: cfg.node_id.clone(),
         node_token: cfg.node_token.clone(),
-        server_url: cfg.server_url.clone(),
-        registered_at,
     };
 
     match saved.save(&cfg.state_path) {

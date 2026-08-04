@@ -185,8 +185,6 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
         .await
         .unwrap_or_else(|e| Err(format!("spawn_blocking error: {}", e)));
 
-        let exec_result: Result<crate::executor::ExecutionResult, Box<dyn std::error::Error>> = exec_result.map_err(|e| e.into());
-
         match exec_result {
             Ok(result) => {
                 report_success(

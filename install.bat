@@ -105,7 +105,7 @@ if not defined REGISTRATION_TOKEN if exist "%REPO_ROOT%\.env" (
 )
 if not defined REGISTRATION_TOKEN if exist "%REPO_ROOT%\server\keys\node_registration_token.txt" (
   set /p REGISTRATION_TOKEN=<"%REPO_ROOT%\server\keys\node_registration_token.txt"
-  set "TOKEN_SOURCE=the server's auto-generated token at %REPO_ROOT%\server\keys\node_registration_token.txt"
+  set "TOKEN_SOURCE=the server's auto-generated token ^(%REPO_ROOT%\server\keys\node_registration_token.txt^)"
 )
 
 if defined REGISTRATION_TOKEN (
@@ -120,12 +120,19 @@ if "%TANDEM_SKIP_NODE%"=="1" (
   goto path_check
 )
 
+REM Windows locks a running .exe's file, so overwriting tandem-node.exe while
+REM it's running fails outright (unlike Linux/macOS, where you can replace a
+REM running executable). Stop it first if it's up -- `tandem node start`
+REM brings it right back afterward. Harmless no-op if nothing was running.
+call "%BIN_DIR%\tandem.bat" node stop >nul 2>&1
+
 REM An explicit prebuilt binary wins. This is the download-a-release flow:
 REM   set "TANDEM_NODE_BIN=C:\path\to\tandem-node.exe" ^&^& install.bat
 if defined TANDEM_NODE_BIN (
   if exist "%TANDEM_NODE_BIN%" (
     echo Using the prebuilt node binary at %TANDEM_NODE_BIN%
     copy /y "%TANDEM_NODE_BIN%" "%NODE_DEST%" >nul
+    if errorlevel 1 goto node_copy_failed
     goto node_ok
   )
   echo warning: TANDEM_NODE_BIN is set but "%TANDEM_NODE_BIN%" does not exist; ignoring it.
@@ -138,6 +145,7 @@ if not errorlevel 1 (
   cargo build --release --manifest-path "%REPO_ROOT%\node\Cargo.toml"
   if not errorlevel 1 (
     copy /y "%REPO_ROOT%\node\target\release\tandem-node.exe" "%NODE_DEST%" >nul
+    if errorlevel 1 goto node_copy_failed
     goto node_ok
   )
   echo warning: building the node failed -- see the cargo output above.
@@ -147,6 +155,7 @@ REM No Cargo, but maybe there's already a build lying around from before.
 if exist "%REPO_ROOT%\node\target\release\tandem-node.exe" (
   echo Cargo isn't installed, but found an existing node build -- using it.
   copy /y "%REPO_ROOT%\node\target\release\tandem-node.exe" "%NODE_DEST%" >nul
+  if errorlevel 1 goto node_copy_failed
   goto node_ok
 )
 
@@ -159,6 +168,12 @@ echo   A^) Install Rust from https://rustup.rs then re-run install.bat
 echo   B^) Download tandem-node.exe from a release, then run:
 echo        set "TANDEM_NODE_BIN=C:\path\to\tandem-node.exe" ^&^& install.bat
 goto compile_install
+
+:node_copy_failed
+echo.
+echo Could not replace %NODE_DEST% -- it's likely still locked by a running node.
+echo Run `tandem node stop`, then re-run install.bat.
+goto path_check
 
 :node_ok
 echo Tandem node installed at %NODE_DEST%

@@ -40,7 +40,7 @@ class UsageEndpointTests(unittest.TestCase):
         db.session.add(UserAPI(user_id=user.id, api_key=api_key))
         db.session.commit()
 
-    def test_reports_measured_instructions_and_placeholders(self) -> None:
+    def test_reports_measured_compute_and_placeholders(self) -> None:
         self._make_user_with_key("KEY123")
         quota.record_usage("KEY123", 250)
 
@@ -49,8 +49,8 @@ class UsageEndpointTests(unittest.TestCase):
 
         resources = {r["type"]: r for r in response.get_json()["resources"]}
 
-        self.assertEqual(resources["instructions"]["source"], usage.MEASURED)
-        self.assertEqual(resources["instructions"]["used"], 250)
+        self.assertEqual(resources["compute"]["source"], usage.MEASURED)
+        self.assertEqual(resources["compute"]["used"], 250)
 
         for placeholder in ("ram", "storage", "cpu", "gpu"):
             self.assertEqual(resources[placeholder]["source"], usage.PLACEHOLDER)
@@ -60,7 +60,29 @@ class UsageEndpointTests(unittest.TestCase):
         self.assertEqual(resources["ram"]["limit"], usage.ACCOUNT_RAM_LIMIT_BYTES)
         self.assertEqual(resources["storage"]["limit"], usage.ACCOUNT_STORAGE_LIMIT_BYTES)
 
-    def test_instructions_sum_across_a_users_keys(self) -> None:
+    def test_cpu_and_ram_become_measured_once_a_node_is_registered(self) -> None:
+        self._make_user_with_key("KEY123")
+
+        register_response = self.client.post(
+            "/nodes/register",
+            json={"supports_wasm": True, "cpu_cores": 8, "memory_mb": 16000},
+            headers={"Authorization": "Bearer KEY123"},
+        )
+        self.assertEqual(register_response.status_code, 201)
+
+        response = self.client.get("/api/v1/usage", headers={"X-API-Key": "KEY123"})
+        resources = {r["type"]: r for r in response.get_json()["resources"]}
+
+        self.assertEqual(resources["cpu"]["source"], usage.MEASURED)
+        self.assertEqual(resources["cpu"]["limit"], 8)
+        self.assertEqual(resources["ram"]["source"], usage.MEASURED)
+        self.assertEqual(resources["ram"]["limit"], 16000 * 2**20)
+
+        # storage and gpu aren't wired up to anything yet, still placeholders.
+        for placeholder in ("storage", "gpu"):
+            self.assertEqual(resources[placeholder]["source"], usage.PLACEHOLDER)
+
+    def test_compute_sum_across_a_users_keys(self) -> None:
         user = User(username="tester", password="unused")
         db.session.add(user)
         db.session.flush()
@@ -73,7 +95,7 @@ class UsageEndpointTests(unittest.TestCase):
 
         response = self.client.get("/api/v1/usage", headers={"X-API-Key": "KEY_A"})
         resources = {r["type"]: r for r in response.get_json()["resources"]}
-        self.assertEqual(resources["instructions"]["used"], 140)
+        self.assertEqual(resources["compute"]["used"], 140)
 
     def test_requires_an_api_key(self) -> None:
         response = self.client.get("/api/v1/usage")

@@ -4,10 +4,12 @@
 #
 #   packaging/build-dmg.sh
 #
-# Produces packaging/dist/tandem-macos-<arch>.dmg. The image holds BOTH binaries
-# (tandem and tandem-node) plus a double-clickable Install.command that copies
-# them to /usr/local/bin, which is on the PATH. So opening the image and running
-# the installer gives a Mac user the same thing the .deb gives a Linux user: the
+# Produces packaging/dist/tandem-macos-<arch>.dmg. The image holds the tandem-cli
+# folder and the tandem-node binary, plus a double-clickable Install.command that
+# puts tandem-node straight on /usr/local/bin and symlinks tandem there too (the
+# CLI itself lives in /usr/local/lib/tandem-cli -- see build-binary.sh for why
+# it's a folder, not a single file). So opening the image and running the
+# installer gives a Mac user the same thing the .deb gives a Linux user: the
 # `tandem` command and the node it drives, ready to go.
 #
 # This one only runs on macOS -- a .dmg is made with hdiutil, which doesn't exist
@@ -40,8 +42,8 @@ if [ ! -f "$NODE_BINARY" ]; then
   cargo build --release --manifest-path "$NODE_DIR/Cargo.toml"
 fi
 
-CLI_BINARY="$CLI_DIR/packaging/dist/tandem"
-if [ ! -f "$CLI_BINARY" ]; then
+CLI_BUNDLE_DIR="$CLI_DIR/packaging/dist/tandem"
+if [ ! -d "$CLI_BUNDLE_DIR" ]; then
   echo "Building the CLI binary first..."
   bash "$CLI_DIR/packaging/build-binary.sh"
 fi
@@ -52,7 +54,10 @@ echo "Packaging tandem $VERSION ($ARCH) into a .dmg..."
 STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT
 
-install -m 0755 "$CLI_BINARY" "$STAGING/tandem"
+# The CLI ships as a folder, not a single file (see build-binary.sh for why
+# it's --onedir) -- copy the whole thing so Install.command can put it
+# somewhere stable and symlink just the executable onto the PATH.
+cp -R "$CLI_BUNDLE_DIR" "$STAGING/tandem-cli"
 install -m 0755 "$NODE_BINARY" "$STAGING/tandem-node"
 
 # A friendly installer the user can double-click from the mounted image. It puts
@@ -61,9 +66,11 @@ cat > "$STAGING/Install.command" <<'INSTALL'
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "Installing tandem and tandem-node to /usr/local/bin (you may be asked for your password)..."
-sudo mkdir -p /usr/local/bin
-sudo install -m 0755 "$HERE/tandem" /usr/local/bin/tandem
+echo "Installing tandem and tandem-node (you may be asked for your password)..."
+sudo mkdir -p /usr/local/bin /usr/local/lib
+sudo rm -rf /usr/local/lib/tandem-cli
+sudo cp -R "$HERE/tandem-cli" /usr/local/lib/tandem-cli
+sudo ln -sf /usr/local/lib/tandem-cli/tandem /usr/local/bin/tandem
 sudo install -m 0755 "$HERE/tandem-node" /usr/local/bin/tandem-node
 echo "Done. Log in with 'tandem auth login', then start the worker with 'tandem node start'."
 INSTALL
@@ -74,13 +81,16 @@ Tandem
 ======
 
 This disk image contains both Tandem commands:
-  * tandem        the command-line tool
+  * tandem-cli/   the command-line tool (a folder, not a single file --
+                   PyInstaller needs its support files alongside the binary)
   * tandem-node   the compute node it drives
 
 To install:
   * Double-click Install.command, OR
-  * copy both onto your PATH yourself, e.g.
-      sudo install -m 0755 tandem tandem-node /usr/local/bin/
+  * do it yourself:
+      sudo cp -R tandem-cli /usr/local/lib/tandem-cli
+      sudo ln -sf /usr/local/lib/tandem-cli/tandem /usr/local/bin/tandem
+      sudo install -m 0755 tandem-node /usr/local/bin/tandem-node
 
 Once they're on your PATH:
   tandem auth login      # log in
@@ -100,3 +110,14 @@ hdiutil create \
   "$OUTPUT" >/dev/null
 
 echo "Built $OUTPUT"
+
+# 3. Also install onto this machine right now, same as double-clicking
+# Install.command would do. That way running this script is enough on its
+# own -- the .dmg is just there to hand off to someone else's Mac.
+echo "Installing tandem and tandem-node (you may be asked for your password)..."
+sudo mkdir -p /usr/local/bin /usr/local/lib
+sudo rm -rf /usr/local/lib/tandem-cli
+sudo cp -R "$STAGING/tandem-cli" /usr/local/lib/tandem-cli
+sudo ln -sf /usr/local/lib/tandem-cli/tandem /usr/local/bin/tandem
+sudo install -m 0755 "$STAGING/tandem-node" /usr/local/bin/tandem-node
+echo "Installed. Log in with 'tandem auth login', then start the worker with 'tandem node start'."

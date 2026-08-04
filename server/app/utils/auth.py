@@ -45,22 +45,17 @@ def require_user_api_key():
 
 
 def ensure_deployment_access(api_client: UserAPI, deployment: Deployment):
-    deployment_api_key = (deployment.api_key or "").strip()
-    if not deployment_api_key:
+    if deployment.user_id is None:
         return (
             jsonify(
                 {
-                    "error": "Deployment is not associated with an API key. Redeploy it with an authenticated /deploy request."
+                    "error": "Deployment is not associated with an owner. Redeploy it with an authenticated /deploy request."
                 }
             ),
             409,
         )
 
-    owner = get_api_client(deployment_api_key)
-    if owner is None:
-        return jsonify({"error": "Deployment owner could not be resolved"}), 403
-
-    if owner.user_id != api_client.user_id:
+    if deployment.user_id != api_client.user_id:
         return jsonify(
             {"error": "API key does not have access to this deployment"}
         ), 403

@@ -28,9 +28,10 @@ target
 .venv/
 __pycache__/
 
-#IDE Pyslop
+#IDE Slop
 .vscode
 .zed
+.claude
 
 # Node modules
 node_modules/
@@ -90,3 +91,7 @@ dist/
 
 # auto-generated node registration secret (see server/app/__init__.py)
 server/keys/node_registration_token.txt
+
+#graphify
+graphify-out/
+CLAUDE.MD

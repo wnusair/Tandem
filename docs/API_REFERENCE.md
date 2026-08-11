@@ -336,6 +336,13 @@ These routes require authentication using a **User API Key** (sent in the `Autho
     "counts": { "queued": 0, "running": 1, "completed": 1, "failed": 0 }
   }
   ```
+* **Duplicate Response (200 OK)**:
+  ```json
+  { "status": "duplicate", "tid": "task_uuid_1" }
+  ```
+  A result for this task was already recorded, so this one was discarded and
+  nothing was billed for it. Safe to treat as success and move on — resending
+  will only get the same answer.
 
 ---
 

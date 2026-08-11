@@ -273,6 +273,39 @@ def is_node_healthy(node: dict[str, str] | None, *, now: float | None = None) ->
     return (now - last_seen) <= NODE_STALE_SECONDS
 
 
+def task_lease_is_live(
+    task: dict[str, str] | None, *, now: float | None = None
+) -> bool:
+    """Is a node still inside the lease it took out when it claimed this task?
+
+    The lease, not the health check, is what says the work is still somebody's.
+    """
+    if not task:
+        return False
+
+    if now is None:
+        now = time.time()
+
+    return safe_float(task.get("lease_expires_at")) > now
+
+
+def settle_result_once(tid: str, claim_token: str) -> bool:
+    """Reserve the right to record the one and only result for this task.
+
+    True for whichever attempt gets here first, False for every duplicate after
+    it. SET NX makes that a single atomic step -- a plain status check can be
+    passed by two requests at once, and then the same work gets billed twice.
+    """
+    reserved = redis_client.set(f"task:{tid}:settled", claim_token, nx=True, ex=86400)
+    return bool(reserved)
+
+
+def settled_by(tid: str, claim_token: str) -> bool:
+    """Did this exact attempt already record the result for this task?"""
+    winner = decode_value(redis_client.get(f"task:{tid}:settled"))
+    return compare_token(winner, claim_token)
+
+
 def get_healthy_node_ids(
     *, exclude: str | None = None, required_runtime: str | None = None
 ) -> list[str]:
@@ -585,6 +618,11 @@ def requeue_stale_tasks() -> None:
 
         if task.get("status") not in {"claimed", "running"}:
             redis_client.hset(f"node:{node_id}", mapping={"current_task": ""})
+            continue
+
+        # Quiet node, but its lease hasn't run out, so it's probably still
+        # running this. Taking it now is what had two nodes on the same work.
+        if task_lease_is_live(task, now=current):
             continue
 
         task_runtime = task.get("runtime") or "cloudpickle"

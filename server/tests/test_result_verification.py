@@ -387,8 +387,10 @@ class ResultVerificationTests(unittest.TestCase):
         self.assertEqual(claim.status_code, 200)
         self.assertEqual(claim.get_json()["tid"], primary_tid)
 
-        # Node 0 goes quiet mid-task and the sweeper reclaims its work.
+        # Node 0 dies mid-task: it stops answering and its lease runs out with
+        # nothing left to renew it, so the sweeper reclaims the work.
         redis_client.hset(f"node:{self.nodes[0].node_id}", "last_seen", "1")
+        redis_client.hset(f"task:{primary_tid}", "lease_expires_at", "1")
         task_queue.sweep_stale_work()
 
         # Nodes 1 and 2 are each running a replica, so the spare is the only

@@ -24,6 +24,8 @@ from app.utils.task_queue import (
     get_node,
     get_task,
     requeue_task,
+    settle_result_once,
+    settled_by,
 )
 from flask import Blueprint, current_app, jsonify, request, send_file
 
@@ -112,6 +114,12 @@ def _maybe_int(value: str | None) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _duplicate_result_response(tid: str):
+    """A result for a task we already settled. 200 rather than an error, since
+    an error status would only make the node send it again."""
+    return jsonify({"status": "duplicate", "tid": tid}), 200
 
 
 def _task_mimetype(task: dict[str, str]) -> str:
@@ -332,6 +340,10 @@ def submit_task_result(tid: str):
 
     claim_token = (request.headers.get("X-Task-Claim") or "").strip()
     if not compare_token(task.get("claim_token"), claim_token):
+        # Settling a task clears its token, so a mismatch is usually just this
+        # node re-sending a result we already have.
+        if settled_by(tid, claim_token):
+            return _duplicate_result_response(tid)
         return jsonify({"error": "Invalid claim token"}), 403
 
     if request.mimetype == "application/octet-stream":
@@ -354,6 +366,12 @@ def submit_task_result(tid: str):
             # Re-queue the task instead of completing it
             requeue_task(tid, None)
             return jsonify({"error": f"Receipt verification failed: {reason}"}), 403
+
+        # One result per task, ever, so the same work never gets billed twice.
+        # After the receipt check on purpose: a bad receipt requeues the task
+        # above and that retry deserves a real shot at settling it.
+        if not settle_result_once(tid, claim_token):
+            return _duplicate_result_response(tid)
 
         # Charge the API key's quota for the compute this task used. We bill the
         # seconds the server watched it run, not the instruction_count the node
@@ -381,6 +399,11 @@ def submit_task_result(tid: str):
 
     data = request.get_json(silent=True) or {}
     error_message = (data.get("error") or "Task execution failed").strip()
+
+    # Same rule for a failure, so a late one can't bury a result we already have.
+    if not settle_result_once(tid, claim_token):
+        return _duplicate_result_response(tid)
+
     summary = fail_task(tid, node_id, error_message=error_message)
     verify.on_task_settled(tid)
 

@@ -1,7 +1,13 @@
+use std::time::Duration;
+
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use wasmtime::component::{Component, Linker as ComponentLinker, Val};
 use wasmtime::{Config, Engine, Linker, Module, Store};
 use wasmtime_wasi::preview1::WasiP1Ctx;
-use wasmtime_wasi::{IoView, ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime_wasi::{
+    HostMonotonicClock, HostWallClock, IoView, ResourceTable, WasiCtx, WasiCtxBuilder, WasiView,
+};
 
 use crate::crypto;
 
@@ -66,6 +72,69 @@ fn is_component(wasm_bytes: &[u8]) -> bool {
     wasm_bytes.len() >= 8 && wasm_bytes[4..8] == COMPONENT_VERSION
 }
 
+/// A clock that always reads the same instant, for every guest on every node.
+///
+/// The server checks a sample of tasks by running them on three nodes and
+/// comparing output hashes, and it permanently bans whoever disagrees with the
+/// majority. A guest that can read the real time therefore gets honest nodes
+/// banned for doing nothing wrong -- they just happened to run a second apart.
+/// Handing every node the same frozen instant takes the clock away as a way to
+/// tell them apart.
+struct FrozenClock;
+
+impl HostWallClock for FrozenClock {
+    fn resolution(&self) -> Duration {
+        Duration::from_secs(1)
+    }
+
+    /// The Unix epoch. Obviously not the real date, and that's deliberate: a
+    /// task that depends on the time notices straight away instead of quietly
+    /// disagreeing with the node next door.
+    fn now(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+impl HostMonotonicClock for FrozenClock {
+    fn resolution(&self) -> u64 {
+        1_000_000_000
+    }
+
+    // ponytail: frozen rather than ticking, so a guest that spins waiting for
+    // the clock to move burns its fuel budget instead of finishing. Swap in an
+    // atomic counter that ticks once per read if a task ever genuinely needs
+    // elapsed time.
+    fn now(&self) -> u64 {
+        0
+    }
+}
+
+/// Start a WASI context that behaves the same way on every node.
+///
+/// Wasmtime's default context wires the guest straight through to the host's
+/// clock and entropy pool, which is exactly what redundant execution can't
+/// live with. We freeze the clocks and seed both random interfaces from the
+/// task's own input, so two nodes running the same task see the same "random"
+/// numbers and the same "now" -- while two different tasks (say, two shards of
+/// one split) still get different streams.
+fn deterministic_wasi_builder(input_bytes: &[u8]) -> WasiCtxBuilder {
+    let secure_seed = crypto::sha256_bytes(input_bytes);
+    // A second, separate seed so a guest reading both random interfaces doesn't
+    // get the same bytes twice.
+    let insecure_seed = crypto::sha256_bytes(&secure_seed);
+
+    let mut builder = WasiCtxBuilder::new();
+    builder
+        .wall_clock(FrozenClock)
+        .monotonic_clock(FrozenClock)
+        .secure_random(StdRng::from_seed(secure_seed))
+        .insecure_random(StdRng::from_seed(insecure_seed))
+        .insecure_random_seed(u128::from_le_bytes(
+            insecure_seed[..16].try_into().expect("16 of 32 bytes"),
+        ));
+    builder
+}
+
 /// Turn a wasmtime run error into our own error, treating a clean WASI exit as
 /// success.
 ///
@@ -108,7 +177,7 @@ fn run_core_module(
     let stdout_buf = wasmtime_wasi::pipe::MemoryOutputPipe::new(1024 * 1024); // 1 MiB cap
     let stdin_buf = wasmtime_wasi::pipe::MemoryInputPipe::new(input_bytes.to_vec());
 
-    let wasi_ctx = WasiCtxBuilder::new()
+    let wasi_ctx = deterministic_wasi_builder(input_bytes)
         .stdin(stdin_buf)
         .stdout(stdout_buf.clone())
         .build_p1();
@@ -206,7 +275,9 @@ fn run_component(
     // unhandled Python exception, since our WIT contract has no error variant --
     // we can surface whatever it printed instead of just the opaque wasmtime trap.
     let stderr_buf = wasmtime_wasi::pipe::MemoryOutputPipe::new(64 * 1024);
-    let ctx = WasiCtxBuilder::new().stderr(stderr_buf.clone()).build();
+    let ctx = deterministic_wasi_builder(input_bytes)
+        .stderr(stderr_buf.clone())
+        .build();
     let host = ComponentHost {
         ctx,
         table: ResourceTable::new(),
@@ -284,6 +355,22 @@ mod tests {
     // contract as an echo, used to check the component run-export path.
     const TASK_COMPONENT: &[u8] = include_bytes!("../tests/fixtures/task_run_component.wasm");
 
+    // A guest that does nothing but read the two things a node has no business
+    // varying: 32 bytes of randomness and the wall clock. Both land in linear
+    // memory, so the memory hash `run_core_module` already computes tells us
+    // whether two runs saw the same values.
+    const NONDETERMINISM_PROBE: &str = r#"
+        (module
+          (import "wasi_snapshot_preview1" "random_get"
+            (func $random_get (param i32 i32) (result i32)))
+          (import "wasi_snapshot_preview1" "clock_time_get"
+            (func $clock_time_get (param i32 i64 i32) (result i32)))
+          (memory (export "memory") 1)
+          (func (export "_start")
+            (drop (call $random_get (i32.const 0) (i32.const 32)))
+            (drop (call $clock_time_get (i32.const 0) (i64.const 0) (i32.const 64)))))
+    "#;
+
     // Frame wasm bytes and the task input the way the rest of Tandem frames a
     // payload: the "TNDM" magic, a little-endian wasm length, the wasm, then the input.
     fn frame(wasm: &[u8], input: &[u8]) -> Vec<u8> {
@@ -315,5 +402,21 @@ mod tests {
         let result = execute_wasm(&payload, None).expect("component should run");
         assert_eq!(result.output, b"hello from a component");
         assert!(result.instruction_count > 0);
+    }
+
+    #[test]
+    fn the_guest_sees_the_same_clock_and_randomness_every_run() {
+        let probe = wat::parse_str(NONDETERMINISM_PROBE).expect("probe should assemble");
+
+        // Same task, run twice: this is what verification compares across three
+        // nodes, so it has to come out identical or an honest node gets banned.
+        let first = execute_wasm(&frame(&probe, b"task input"), None).expect("probe should run");
+        let second = execute_wasm(&frame(&probe, b"task input"), None).expect("probe should run");
+        assert_eq!(first.memory_hash, second.memory_hash);
+
+        // A different task still gets its own randomness, or every shard of a
+        // split would compute with the same "random" numbers.
+        let other = execute_wasm(&frame(&probe, b"other input"), None).expect("probe should run");
+        assert_ne!(first.memory_hash, other.memory_hash);
     }
 }

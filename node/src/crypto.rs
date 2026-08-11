@@ -81,8 +81,13 @@ pub fn sign_receipt(
 
 /// SHA-256 hash of `data`, returned as a lowercase hex string.
 pub fn sha256_hex(data: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(data);
-    hex_encode(&digest)
+    hex_encode(&sha256_bytes(data))
+}
+
+/// SHA-256 hash of `data` as raw bytes, for when you want a seed rather than
+/// something to print.
+pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
+    sha2::Sha256::digest(data).into()
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

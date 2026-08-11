@@ -24,3 +24,8 @@ dotenvy = "0.15"
 rand = "0.8"
 libc = "0.2"
 sysinfo = "0.39.6"
+
+[dev-dependencies]
+# Lets the executor tests assemble a tiny probe module from WAT text instead of
+# checking in another binary fixture. Wasmtime already pulls this in.
+wat = "1"

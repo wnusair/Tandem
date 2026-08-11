@@ -9,6 +9,7 @@ These rules dictate how code should be written, styled, and committed in this re
 
 ## 2. Commenting Rules
 - Leave comments in a natural, conversational, human method. Avoid using a bunch of trailing dashes, robotic formatting, or overly verbose structural markers. Write explanations as if you are explaining the code to a teammate.
+- That does not mean leave 10 lines of comments, something short and sweet. Following the rules of the Ponytail plugin if applicable.
 
 ## 3. Git Workflow
 - Periodically stage changes (`git add`) and commit every hundred lines or so (or after small, logical milestones). Do not build up massive changes for a single commit.

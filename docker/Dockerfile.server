@@ -13,5 +13,6 @@ COPY server/ ./server/
 WORKDIR /srv/server
 EXPOSE 6767
 
-# run.py binds 0.0.0.0:6767.
-CMD ["python", "run.py"]
+# run.py binds 0.0.0.0:6767. The migrations run first, so a fresh container
+# comes up with a schema instead of erroring on the first query.
+CMD ["sh", "-c", "flask --app app db upgrade && python run.py"]

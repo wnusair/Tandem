@@ -8,8 +8,13 @@ These rules dictate how code should be written, styled, and committed in this re
 - Lay the groundwork first (basic structure, core types, interfaces, or setup) and then build up gradually to the more complex logic. 
 
 ## 2. Commenting Rules
-- Leave comments in a natural, conversational, human method. Avoid using a bunch of trailing dashes, robotic formatting, or overly verbose structural markers. Write explanations as if you are explaining the code to a teammate.
-- That does not mean leave 10 lines of comments, something short and sweet. Following the rules of the Ponytail plugin if applicable.
+- Comment only where the code cannot speak for itself. Explain *why* something is the way it is, never *what* the line below does. If the code is clear, leave it alone.
+- Keep the wording plain and human, the way you'd write it in a code review. Natural tone, not a conversation with the reader: no narrating your own thought process, no telling the story of the bug you fixed, no asides.
+- One or two lines. If it needs a paragraph, the code probably needs the rework instead.
+- No decorative formatting: no banner separators, no rows of dashes, no numbered step headers. A comment is a sentence, not a section marker.
+- Public functions and types get a short doc comment saying what they're for. Private helpers usually don't need one.
+- Keep them true. A stale comment is worse than none, so if you change the code, change or delete the comment with it.
+- Follow the rules of the Ponytail plugin if applicable.
 
 ## 3. Git Workflow
 - Periodically stage changes (`git add`) and commit every hundred lines or so (or after small, logical milestones). Do not build up massive changes for a single commit.

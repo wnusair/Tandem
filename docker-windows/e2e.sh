@@ -18,11 +18,11 @@ done
 
 say "register + login"
 # Register may 409 on a re-run; that's fine, we just need to log in afterwards.
-curl -s -o /dev/null -X POST "$SERVER/api/v1/register" \
+curl -s -o /dev/null -X POST "$SERVER/api/v1/auth/register" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" || true
 
-API_KEY="$(curl -sf -X POST "$SERVER/api/v1/login" \
+API_KEY="$(curl -sf -X POST "$SERVER/api/v1/auth/login" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}" \
   | python3 -c 'import sys, json; print(json.load(sys.stdin)["api_key"])')"
@@ -62,6 +62,22 @@ print("gathered:", results)
 expected = [45, 4950, 499500]
 assert results == expected, f"expected {expected}, got {results}"
 print("gather OK")
+PY
+
+say "memory cap: a task that grabs 1 GiB must be refused, and the node must survive"
+python3 - <<'PY'
+from app import crunch, hog
+
+try:
+    value = hog.submit(1024).result(timeout=180)
+except RuntimeError as err:
+    print("refused, as it should be:", str(err)[:200])
+else:
+    raise SystemExit(f"FAIL: the node handed back {value} instead of refusing 1 GiB")
+
+# The whole point of the cap: the node is still there to serve the next task.
+assert crunch.submit(5).result(timeout=120) == 10, "the node did not survive the memory bomb"
+print("memory cap OK, node still serving")
 PY
 
 say "web hosting: deploy an app across the nodes and load-balance to it"

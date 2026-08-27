@@ -44,10 +44,6 @@ _KEYRING_REGISTRATION_TOKEN_KEY = "tandem_node_registration_token"
 _FALLBACK_CREDS_PATH = Path.home() / ".tandem" / "credentials.json"
 
 
-# ---------------------------------------------------------------------------
-# Keyring abstraction (with secure-file fallback)
-# ---------------------------------------------------------------------------
-
 def _keyring_available() -> bool:
     try:
         import keyring  # noqa: F401
@@ -129,10 +125,6 @@ def _file_delete(key: str) -> None:
         pass
 
 
-# ---------------------------------------------------------------------------
-# Session data class
-# ---------------------------------------------------------------------------
-
 @dataclass
 class AuthSession:
     username: str
@@ -141,10 +133,6 @@ class AuthSession:
     api_key: str
     server_url: str
 
-
-# ---------------------------------------------------------------------------
-# Server URL resolution
-# ---------------------------------------------------------------------------
 
 def resolve_server_url(server_url: str | None = None) -> str:
     resolved = (
@@ -178,14 +166,10 @@ def clear_stored_server_url() -> None:
     _keyring_delete(_KEYRING_SERVER_URL_KEY)
 
 
-# ---------------------------------------------------------------------------
-# Node registration token
-# ---------------------------------------------------------------------------
 # Some servers require a shared secret before they'll let a new machine
 # register as a node (see TANDEM_NODE_REGISTRATION_TOKEN on the server side).
 # We save it the same way we save the server URL, so it survives across
 # terminal sessions instead of needing to be exported by hand every time.
-
 def get_stored_registration_token() -> str | None:
     """Return the token saved via `tandem settings set-registration-token`, if any."""
     return _keyring_get(_KEYRING_REGISTRATION_TOKEN_KEY)
@@ -204,10 +188,6 @@ def clear_stored_registration_token() -> None:
     """Remove the saved registration token, falling back to TANDEM_NODE_REGISTRATION_TOKEN if set."""
     _keyring_delete(_KEYRING_REGISTRATION_TOKEN_KEY)
 
-
-# ---------------------------------------------------------------------------
-# Interactive prompts
-# ---------------------------------------------------------------------------
 
 def prompt_username(username: str | None) -> str:
     resolved = (username or "").strip()
@@ -250,10 +230,6 @@ def mask_secret(value: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
-# ---------------------------------------------------------------------------
-# HTTP helpers
-# ---------------------------------------------------------------------------
-
 def _response_payload(response: requests.Response) -> Any:
     content_type = (response.headers.get("Content-Type") or "").lower()
     if "application/json" in content_type:
@@ -279,10 +255,6 @@ def _raise_response_error(response: requests.Response) -> None:
         f"{response.request.method} {response.url} failed with {response.status_code}: {detail}"
     )
 
-
-# ---------------------------------------------------------------------------
-# Core auth operations
-# ---------------------------------------------------------------------------
 
 def register_user(
     *,

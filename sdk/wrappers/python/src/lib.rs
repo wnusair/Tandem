@@ -1,13 +1,8 @@
-//! PyO3 bridge that exposes the Tandem compile engine to Python.
-//!
-//! This wrapper is the thin "language binding" layer: Python code calls in
-//! here, and everything real happens in the `tandem_core` crate. For now it
-//! exposes the artifact check so the wrapper and the core are always built and
-//! tested together; the full `compile` entry point lands once the language
-//! backends are wired up.
+//! PyO3 bridge that exposes the Tandem compile engine to Python. Everything
+//! real happens in `tandem_core`; for now only the artifact check is exposed,
+//! with the full `compile` entry point landing once the backends are wired up.
 
-// The #[pyfunction] macro expansion below inserts a same-type conversion that
-// clippy flags as useless; it's generated code, not something we can rewrite.
+// #[pyfunction] expands to a same-type conversion clippy flags as useless.
 #![allow(clippy::useless_conversion)]
 
 use pyo3::exceptions::PyValueError;
@@ -15,9 +10,6 @@ use pyo3::prelude::*;
 use tandem_core::detect_kind;
 
 /// Report whether some WASM bytes are a "component" or a "core-module".
-///
-/// Handy for tooling and tests, and it keeps the Python wrapper exercising the
-/// real Rust core end to end.
 #[pyfunction]
 #[pyo3(text_signature = "(wasm_bytes)")]
 fn artifact_kind(wasm_bytes: &[u8]) -> PyResult<String> {

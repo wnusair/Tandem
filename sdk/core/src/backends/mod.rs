@@ -1,8 +1,5 @@
-//! Language backends that turn source into a WASM artifact.
-//!
-//! Each backend implements the [`CompileBackend`](crate::compile::CompileBackend)
-//! trait. Today there's just one — Python via componentize-py — but the whole
-//! point of the trait is that adding another language is only a matter of adding
-//! another backend module here and wiring it up.
+//! Language backends that turn source into a WASM artifact. Adding a language
+//! means adding a module here that implements
+//! [`CompileBackend`](crate::compile::CompileBackend).
 
 pub mod componentize_py;

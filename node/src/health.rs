@@ -2,8 +2,7 @@ use std::time::Duration;
 
 use crate::config::NodeConfig;
 
-/// Run the health-check loop forever.  Designed to be spawned as a
-/// `tokio::spawn` background task.
+/// Ping the server forever. Meant to be spawned as a background task.
 pub async fn health_loop(config: NodeConfig) {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -25,9 +24,7 @@ pub async fn health_loop(config: NodeConfig) {
             .await;
 
         match result {
-            Ok(resp) if resp.status().is_success() => {
-                // Healthy — nothing to log under normal operation.
-            }
+            Ok(resp) if resp.status().is_success() => {}
             Ok(resp) => {
                 eprintln!(
                     "[health] warning: server responded with {}",

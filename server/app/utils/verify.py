@@ -1,17 +1,12 @@
 """Redundant execution: run some tasks on several nodes and compare answers.
 
-A signed execution receipt proves which node produced a set of bytes, not that
-the bytes are correct -- a dishonest node signs its garbage perfectly well. The
-only way to catch that is a second opinion, so we quietly run a sampled fraction
-of tasks on several nodes at once and compare what comes back.
+A signed receipt proves which node produced some bytes, not that the bytes are
+correct, so a sampled fraction of tasks runs on several nodes at once. The
+copies are ordinary tasks -- own id, own key, own blob, identical claim
+response -- so a node can't tell it's being checked.
 
-The copies are ordinary tasks: own id, own encryption key, own blob, identical
-claim response. A node has no way to tell it's being checked, which is the whole
-point -- it can't behave only when someone's watching.
-
-When the copies disagree we don't just make a note of it. The majority answer is
-what the client gets, and any node that returned something else is off the
-network for good.
+On a disagreement the client gets the majority answer, and any node that
+returned something else is banned for good.
 """
 
 from __future__ import annotations
@@ -53,9 +48,6 @@ MIN_VERIFY_COPIES = 3
 REPORTED_STATUSES = {"completed", "failed", "verifying"}
 
 
-# ── Settings ────────────────────────────────────────────────────────────────
-
-
 def _config_int(key: str, default: int) -> int:
     try:
         return int(current_app.config.get(key, default))
@@ -76,9 +68,6 @@ def verify_copies() -> int:
 def settle_timeout_seconds() -> int:
     """How long we wait for the other copies before giving up on them."""
     return max(1, _config_int("VERIFY_TIMEOUT_SECONDS", 300))
-
-
-# ── Planning ────────────────────────────────────────────────────────────────
 
 
 def plan_verification_replicas(
@@ -129,9 +118,6 @@ def plan_verification_replicas(
             expanded.append(replica)
 
     return expanded
-
-
-# ── Settling a group ────────────────────────────────────────────────────────
 
 
 def _is_replica(task: dict[str, str]) -> bool:

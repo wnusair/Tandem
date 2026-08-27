@@ -9,8 +9,6 @@ use crate::config::NodeConfig;
 use crate::crypto;
 use crate::executor;
 
-// ── Server DTOs ─────────────────────────────────────────────────────────────
-
 #[derive(Deserialize, Debug)]
 struct ClaimResponse {
     tid: String,
@@ -23,13 +21,9 @@ struct ClaimResponse {
     timeout_ms: Option<u64>,
 }
 
-// ── Constants ───────────────────────────────────────────────────────────────
-
 const MIN_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-
-// ── Public entry ────────────────────────────────────────────────────────────
 
 /// Run the task-claim / execute / report loop until the process is
 /// terminated.
@@ -47,7 +41,6 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
     let mut backoff = MIN_POLL_INTERVAL;
 
     loop {
-        // ── 1. Claim a task ─────────────────────────────────────────────
         let claim_result = client
             .post(&claim_url)
             .header("X-Node-Id", &config.node_id)
@@ -97,7 +90,6 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
             task.tid, task.runtime, task.task_name
         );
 
-        // ── 2. Validate runtime ─────────────────────────────────────────
         if task.runtime != "wasm" {
             eprintln!("[worker] unsupported runtime '{}' — skipping", task.runtime);
             report_failure(
@@ -111,7 +103,6 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
             continue;
         }
 
-        // ── 3. Download blob ────────────────────────────────────────────
         let blob_result = client
             .get(&task.download_url)
             .header("X-Node-Id", &config.node_id)
@@ -155,7 +146,6 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
             }
         };
 
-        // ── 4. Decrypt (if encrypted) ───────────────────────────────────
         let wasm_bytes = if let (Some(dek_b64), Some(iv_b64)) = (&encrypted_dek, &iv) {
             match crypto::decrypt_dek(private_key, dek_b64) {
                 Ok(dek) => match crypto::decrypt_blob(&dek, iv_b64, &raw_bytes) {
@@ -177,7 +167,6 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
             raw_bytes
         };
 
-        // ── 5. Execute ──────────────────────────────────────────────────
         let timeout_ms = task.timeout_ms;
         let exec_result = tokio::task::spawn_blocking(move || {
             executor::execute_wasm(&wasm_bytes, timeout_ms).map_err(|e| e.to_string())
@@ -210,11 +199,9 @@ pub async fn task_loop(config: &NodeConfig, private_key: &RsaPrivateKey) {
             }
         }
 
-        // Immediately poll for next task (no sleep).
+        // Straight back to the top: after one task there's often another waiting.
     }
 }
-
-// ── Result reporting helpers ────────────────────────────────────────────────
 
 async fn report_success(
     client: &reqwest::Client,
@@ -226,7 +213,6 @@ async fn report_success(
 ) {
     let output_hash = crypto::sha256_hex(&result.output);
 
-    // Canonical message for the execution receipt.
     let canonical = format!(
         "{}|{}|{}|{}",
         tid, result.instruction_count, result.memory_hash, output_hash

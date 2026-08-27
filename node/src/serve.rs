@@ -1,16 +1,8 @@
 //! Hosting a user's web app on this node.
 //!
-//! A serve deployment is a real web app (Flask, FastAPI, a plain stdlib server,
-//! ...). We run it inside the hardened sandbox with **no network at all**
-//! (`--unshare-net`), so it can't phone home or be reached from the outside. It
-//! talks to us over a **unix domain socket** in its own working directory
-//! instead: the app binds `$TANDEM_SERVE_SOCKET`, and the node proxies HTTP to
-//! that socket. The node is the app's only door to the world.
-//!
-//! This module owns two things: launching the app in the sandbox and waiting for
-//! it to come up (`ServedApp`), and forwarding one HTTP request to it over the
-//! socket (`proxy_request`). The loop that pulls requests from the server and
-//! feeds them here lives in the worker wiring.
+//! A serve deployment runs in the hardened sandbox with no network at all, so
+//! the node is its only door to the world: the app binds
+//! `$TANDEM_SERVE_SOCKET` and we proxy HTTP over that unix socket.
 
 // The serve request/claim loop is still being wired into main, so a couple of
 // these are only used by tests for now.
@@ -64,19 +56,11 @@ impl ServedApp {
     }
 }
 
-/// Launch a web app in the sandbox and wait for its socket to come up.
+/// Fork the app in the sandbox, without waiting for its socket to come up.
 ///
-/// * `work_dir` already contains the unpacked app (its code is at the top).
-/// * `start_command` is what the user told us to run, e.g. `["python3", "app.py"]`.
-/// * `limits` are the resource ceilings (the account's RAM cap, etc.).
-///
-/// Fork the app in the sandbox WITHOUT waiting for its socket to come up.
-///
-/// Important subtlety: bwrap's `--die-with-parent` ties the app's lifetime to
-/// the *thread* that forked it (Linux `PR_SET_PDEATHSIG` is thread-scoped, not
-/// process-scoped). So this must be called from a long-lived runtime thread --
-/// never a transient one like a `spawn_blocking` worker that tokio may reap,
-/// which would kill the app out from under us seconds after it started.
+/// Must be called from a long-lived runtime thread, never a transient one like
+/// a `spawn_blocking` worker: bwrap's `--die-with-parent` is thread-scoped
+/// (`PR_SET_PDEATHSIG`), so tokio reaping that thread would kill the app.
 pub fn spawn_app(
     work_dir: &Path,
     start_command: &[String],
@@ -98,8 +82,6 @@ pub fn spawn_app(
                 "TANDEM_SERVE_SOCKET".to_string(),
                 format!("/app/{SOCKET_NAME}"),
             ),
-            // So the app can tell which node it's running on (handy for showing
-            // that the load balancer really is spreading traffic).
             ("TANDEM_NODE_ID".to_string(), node_id.to_string()),
         ],
         allow_network: false,
@@ -110,9 +92,7 @@ pub fn spawn_app(
     Ok(ServedApp { child, socket_path })
 }
 
-/// Poll for the app's socket without blocking a runtime thread. The per-attempt
-/// connect is a near-instant local syscall; the wait between attempts yields
-/// back to the runtime.
+/// Poll for the app's socket without blocking a runtime thread.
 async fn wait_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -134,9 +114,7 @@ async fn wait_ready(socket_path: &Path, timeout: Duration) -> io::Result<()> {
 
 /// Forward one HTTP request to the app over its unix socket and read the reply.
 ///
-/// We speak plain HTTP/1.1 with `Connection: close`, which keeps the proxy
-/// simple: send the request, read until the app closes the socket, done. That's
-/// plenty for request/response web apps.
+/// Plain HTTP/1.1 with `Connection: close`: send, read until the app closes.
 pub fn proxy_request(
     socket_path: &Path,
     method: &str,
@@ -173,7 +151,6 @@ pub fn proxy_request(
 
 /// Split a raw HTTP/1.1 response into status, headers, and body.
 fn parse_http_response(raw: &[u8]) -> io::Result<HttpResponse> {
-    // Find the blank line that separates headers from the body.
     let split_at = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidData, "malformed HTTP response from app")
     })?;
@@ -209,10 +186,6 @@ fn parse_status_code(status_line: &str) -> io::Result<u16> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad HTTP status line from app"))
 }
 
-// ---------------------------------------------------------------------------
-// Coordination with the server: claim a deployment, then serve its requests.
-// ---------------------------------------------------------------------------
-
 /// Where a deployment's unpacked app lives on this node.
 fn serve_work_dir(pid: &str) -> PathBuf {
     std::env::temp_dir().join("tandem-serve").join(pid)
@@ -235,13 +208,8 @@ fn with_node_auth(builder: reqwest::RequestBuilder, cfg: &NodeConfig) -> reqwest
         .header("Authorization", format!("Bearer {}", cfg.node_token))
 }
 
-/// The node's serve side: keep asking the server for a deployment to host, and
-/// once we're hosting one, keep pulling its requests and proxying them.
-///
-/// This runs forever alongside the compute task loop. It only ever talks *out*
-/// to the server, same as everything else the node does.
-/// How many times we try to start a deployment before giving up on it and
-/// telling the server it's broken, so it stops being re-assigned forever.
+/// How many times we try to start a deployment before reporting it broken, so
+/// it stops being re-assigned forever.
 const MAX_START_ATTEMPTS: u32 = 3;
 
 /// What `/nodes/serve/next` hands back: maybe a request to proxy, plus any pids
@@ -254,6 +222,9 @@ struct NextOutcome {
 /// Shared handle to the apps this node is currently hosting.
 type AppMap = Arc<Mutex<HashMap<String, ServedApp>>>;
 
+/// Keep asking the server for a deployment to host, and keep pulling and
+/// proxying requests for whatever we're already hosting. Runs forever alongside
+/// the compute task loop, and only ever talks out to the server.
 pub async fn serve_loop(cfg: NodeConfig) {
     let client = reqwest::Client::new();
     let apps: AppMap = Arc::new(Mutex::new(HashMap::new()));
@@ -263,10 +234,9 @@ pub async fn serve_loop(cfg: NodeConfig) {
     let given_up: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
     loop {
-        // 1. Pick up a new assignment. Starting it (download + wait for its
-        //    socket, up to ~15s) runs in its OWN task, so a slow or failing
-        //    start never blocks the serving/heartbeat step below -- that was the
-        //    old bug where one broken deploy starved every healthy one.
+        // Start the assignment in its own task: a slow or failing start (up
+        // to ~15s) must not block the serving step below, or one broken deploy
+        // starves every healthy one.
         match try_claim(&client, &cfg).await {
             Ok(Some((pid, start_command))) => {
                 let fresh = {
@@ -296,8 +266,8 @@ pub async fn serve_loop(cfg: NodeConfig) {
             Err(err) => eprintln!("[serve] claim error: {err}"),
         }
 
-        // 2. Serve one request across everything we host (this also heartbeats
-        //    each app so the load balancer keeps it "healthy serving").
+        // Serving also heartbeats each app, so the load balancer keeps it
+        // marked healthy.
         let pids: Vec<String> = { apps.lock().unwrap().keys().cloned().collect() };
         if pids.is_empty() {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -411,9 +381,8 @@ async fn setup_app(
 
     let work_dir = serve_work_dir(pid);
 
-    // Unpack the bundle off the runtime. `tar` is a short-lived child that exits
-    // on its own, so there's no --die-with-parent concern in doing this on a
-    // transient blocking thread (unlike forking the app itself, below).
+    // `tar` is a short-lived child that exits on its own, so unlike forking the
+    // app below it's fine on a transient blocking thread.
     {
         let work_dir = work_dir.clone();
         tokio::task::spawn_blocking(move || -> io::Result<()> {
@@ -437,9 +406,8 @@ async fn setup_app(
         .await??;
     }
 
-    // Fork the app on THIS runtime thread (a long-lived tokio worker) so
-    // bwrap's thread-scoped --die-with-parent ties it to the node's lifetime,
-    // then wait for its socket asynchronously.
+    // Fork on THIS runtime thread so --die-with-parent ties the app to the
+    // node's lifetime, then wait for its socket asynchronously.
     let mut app = spawn_app(&work_dir, start_command, &cfg.node_id, SandboxLimits::default())?;
     if let Err(err) = wait_ready(app.socket_path(), Duration::from_secs(15)).await {
         app.shutdown();
@@ -475,7 +443,6 @@ async fn next_request(
         .map(|items| items.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
 
-    // The request lives under "request"; treat a missing/empty req_id as "none".
     let req_val = &value["request"];
     let request = match req_val.get("req_id").and_then(|v| v.as_str()) {
         Some(req_id) if !req_id.is_empty() => {
@@ -506,8 +473,7 @@ async fn handle_request(
     apps: &AppMap,
     req: PendingRequest,
 ) {
-    // Grab just the socket path under the lock, then release it before the
-    // blocking proxy call below.
+    // Release the lock before the blocking proxy call below.
     let socket = {
         let hosting = apps.lock().unwrap();
         match hosting.get(&req.pid) {
@@ -516,8 +482,7 @@ async fn handle_request(
         }
     };
 
-    // The proxy call is blocking (a plain unix socket), so run it off the async
-    // runtime's threads.
+    // The proxy call blocks on a plain unix socket, so keep it off the runtime.
     let proxied = tokio::task::spawn_blocking(move || {
         proxy_request(&socket, &req.method, &req.path, &req.headers, &req.body)
     })
@@ -567,9 +532,7 @@ mod tests {
     use super::*;
     use crate::sandbox::bwrap_available;
 
-    // A tiny stdlib-only web app that binds the unix socket Tandem hands it and
-    // answers every GET with a fixed body. No third-party deps, so it runs in the
-    // no-network sandbox as-is.
+    // Stdlib only, so it runs in the no-network sandbox as-is.
     const SAMPLE_APP: &str = r#"
 import os, socketserver, http.server
 

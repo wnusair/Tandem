@@ -201,8 +201,6 @@ class ResultIdempotencyTests(unittest.TestCase):
             task_name="demo",
         )
 
-    # ── Node plumbing ───────────────────────────────────────────────────────
-
     def _register_node(self) -> _Node:
         private_key, public_pem = _make_keypair()
         response = self.client.post(
@@ -257,8 +255,6 @@ class ResultIdempotencyTests(unittest.TestCase):
         the interleaving that used to let one task be billed twice.
         """
         redis_client.hset(f"task:{self.tid}", mapping={"claim_token": claim_token})
-
-    # ── The checks ──────────────────────────────────────────────────────────
 
     def test_a_resent_result_is_recognised_and_only_billed_once(self) -> None:
         claim_token = self._claim(self.node_a)

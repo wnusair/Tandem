@@ -44,10 +44,6 @@ from .node_paths import (
 from .remote import _resolve_server_url as resolve_job_server_url
 
 
-# ---------------------------------------------------------------------------
-# Small result/status types the CLI layer formats for the user
-# ---------------------------------------------------------------------------
-
 @dataclass
 class RegistrationResult:
     ok: bool
@@ -65,10 +61,6 @@ class NodeStatus:
     registered_at: int | None
     uptime_seconds: int | None
 
-
-# ---------------------------------------------------------------------------
-# Server URL + environment for the node
-# ---------------------------------------------------------------------------
 
 def resolve_node_server_url(server_url: str | None = None) -> str:
     """Point the node at the same server deploy/start use.
@@ -117,10 +109,6 @@ def _missing_binary_message() -> str:
         "or set TANDEM_NODE_BIN to point at a prebuilt binary."
     )
 
-
-# ---------------------------------------------------------------------------
-# Saved identity + registration
-# ---------------------------------------------------------------------------
 
 def load_identity() -> dict | None:
     """Read the saved node identity, or None if the node has never registered."""
@@ -190,10 +178,6 @@ def register_node_now(server_url: str, *, timeout: float = 120.0) -> Registratio
     node_id = (identity or {}).get("node_id")
     return RegistrationResult(True, node_id, "")
 
-
-# ---------------------------------------------------------------------------
-# Low-level process helpers (pid file + liveness, cross-platform)
-# ---------------------------------------------------------------------------
 
 def _read_pid() -> int | None:
     path = pid_file()
@@ -282,10 +266,6 @@ def _terminate(pid: int, *, force: bool = False) -> None:
     except ProcessLookupError:
         pass
 
-
-# ---------------------------------------------------------------------------
-# Backend 1: plain detached daemon tracked by a pid file
-# ---------------------------------------------------------------------------
 
 def _daemon_running() -> bool:
     pid = _read_pid()
@@ -382,10 +362,6 @@ def _daemon_uptime_seconds() -> int | None:
         return None
     return max(0, int(time.time() - started))
 
-
-# ---------------------------------------------------------------------------
-# Backend 2: OS service (systemd on Linux, launchd on macOS)
-# ---------------------------------------------------------------------------
 
 _SYSTEMD_UNIT_NAME = "tandem-node.service"
 _LAUNCHD_LABEL = "org.tandem.node"
@@ -564,10 +540,6 @@ def _disable_launchd() -> None:
     except FileNotFoundError:
         pass
 
-
-# ---------------------------------------------------------------------------
-# Dispatch layer -- what the CLI commands actually call
-# ---------------------------------------------------------------------------
 
 def active_backend() -> str:
     """Which backend is in charge right now. A service only counts as active once

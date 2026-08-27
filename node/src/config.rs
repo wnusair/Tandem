@@ -30,9 +30,7 @@ impl NodeConfig {
         let state_path =
             env::var("TANDEM_NODE_STATE_PATH").unwrap_or_else(|_| "./node_state.json".to_string());
 
-        // Whatever we saved the last time we registered. Env vars still win, but
-        // when they're absent this is what keeps our identity stable across
-        // restarts instead of registering a fresh node every boot.
+        // What we saved when we last registered. Env vars still win.
         let saved = NodeState::load(&state_path);
 
         let node_id = env_or_saved("TANDEM_NODE_ID", saved.as_ref().map(|s| s.node_id.as_str()));

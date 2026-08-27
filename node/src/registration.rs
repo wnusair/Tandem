@@ -20,17 +20,15 @@ struct RegisterRequest {
     memory_mb: u64,
 }
 
-/// How many CPU cores this machine has, so the server can eventually make
-/// spec-aware scheduling decisions. Falls back to 1 if the OS won't tell us.
+/// CPU core count for spec-aware scheduling, or 1 if the OS won't say.
 fn cpu_cores() -> usize {
     thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
 }
 
-/// The CPU's model name and clock speed (MHz), read off the first logical
-/// core -- on real hardware every core reports the same model, so one read
-/// is enough. Falls back to "unknown"/0 if the OS won't tell us.
+/// The CPU's model name and clock speed (MHz). Every core reports the same
+/// model on real hardware, so the first one is enough.
 fn cpu_info() -> (String, u64) {
     let mut sys = System::new_with_specifics(
         RefreshKind::nothing().with_cpu(CpuRefreshKind::everything()),
@@ -38,16 +36,14 @@ fn cpu_info() -> (String, u64) {
     sys.refresh_cpu_all();
 
     match sys.cpus().first() {
-        // Real hardware often pads the brand string with trailing spaces
-        // (it comes straight from the CPUID instruction on x86), so trim it.
+        // The brand string comes straight from CPUID and is often space-padded.
         Some(cpu) => (cpu.brand().trim().to_string(), cpu.frequency()),
         None => ("unknown".to_string(), 0),
     }
 }
 
-/// Total system memory in megabytes. We only need the memory reading here, so
-/// we skip the heavier `System::new_all()` (which also scans processes, disks,
-/// etc.) and just refresh what we're after.
+/// Total system memory in megabytes. Refreshes only memory, skipping the
+/// heavier `System::new_all()` process and disk scan.
 fn memory_mb() -> u64 {
     let mut sys = System::new();
     sys.refresh_memory();
@@ -84,12 +80,10 @@ pub async fn register_node(
 
     let private_key = RsaPrivateKey::new(&mut OsRng, RSA_KEY_BITS)?;
 
-    // Persist private key in PKCS#8 PEM format.
     let pem = private_key.to_pkcs8_pem(LineEnding::LF)?;
     fs::write(private_key_path, pem.as_bytes())?;
     eprintln!("[registration] private key saved to {private_key_path}");
 
-    // Derive public key PEM for the registration payload.
     let pub_pem = private_key
         .to_public_key()
         .to_public_key_pem(LineEnding::LF)?;

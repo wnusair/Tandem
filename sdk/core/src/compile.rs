@@ -1,9 +1,5 @@
-//! The compile contract every language backend implements.
-//!
-//! The whole point of Tandem's engine is that adding a new language should mean
-//! writing one small backend, not a new pipeline. So the shape of a compile
-//! request, the errors, and the trait all live here, and each backend just
-//! turns a `CompileRequest` into an `Artifact`.
+//! The compile contract every language backend implements: turn a
+//! `CompileRequest` into an `Artifact`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -11,16 +7,12 @@ use std::path::PathBuf;
 use crate::artifact::Artifact;
 use crate::validate::validate_artifact;
 
-/// A hard ceiling on how big a compiled artifact may be (256 MiB).
-///
-/// Componentize-py bundles a Python interpreter, so real artifacts are large,
-/// but this stops an obviously broken or malicious build from filling the disk.
+/// A hard ceiling on artifact size. Generous because componentize-py bundles a
+/// Python interpreter, but enough to stop a broken build filling the disk.
 pub const MAX_ARTIFACT_BYTES: usize = 256 * 1024 * 1024;
 
 /// Free-form knobs the SDK passes down to a backend (timeout_ms, memory_mb, ...).
-///
-/// We keep them as sorted string pairs so the same options always hash the same
-/// way, which the build cache relies on.
+/// Sorted, so the same options always hash the same way for the build cache.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompileOptions {
     pub values: BTreeMap<String, String>,
@@ -39,11 +31,8 @@ impl CompileOptions {
     }
 }
 
-/// What the compiled task is for.
-///
-/// Compute tasks run once (stdin JSON in, stdout JSON out). Serve tasks are
-/// long-lived web apps that the node hosts as a real process rather than as
-/// WASM, so they're noted here but never actually lowered to WASM by a backend.
+/// Compute tasks run once, JSON in and JSON out. Serve tasks are long-lived web
+/// apps the node hosts as a real process, so no backend ever lowers them to WASM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskShape {
     Compute,
@@ -108,11 +97,8 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
-/// The one thing a language backend has to implement.
-///
-/// Give it a request, get back an artifact. The engine takes care of caching
-/// and validation around it (see `compile_with_cache` at the crate root), so a
-/// backend only has to worry about the actual compile.
+/// The one thing a language backend has to implement. Caching and validation
+/// happen around it in `compile_with_cache`.
 pub trait CompileBackend {
     /// Which language this backend handles, e.g. "python".
     fn language(&self) -> &str;
@@ -124,11 +110,8 @@ pub trait CompileBackend {
     fn compile(&self, request: &CompileRequest) -> Result<Artifact, CompileError>;
 }
 
-/// Validate whatever a backend produced against the engine's trust rules and
-/// wrap it up as an `Artifact`.
-///
-/// Backends call this so no unchecked bytes ever reach a node, and so every
-/// backend shares exactly the same checks.
+/// Validate whatever a backend produced and wrap it as an `Artifact`. Backends
+/// call this so no unchecked bytes ever reach a node.
 pub fn finalize_artifact(bytes: Vec<u8>) -> Result<Artifact, CompileError> {
     let kind = validate_artifact(&bytes, MAX_ARTIFACT_BYTES)?;
     Ok(Artifact::new(bytes, kind))

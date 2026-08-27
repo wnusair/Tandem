@@ -3,11 +3,8 @@ mod crypto;
 mod executor;
 mod health;
 mod registration;
-// Bubblewrap + a per-app unix-domain socket make up the serve sandbox,
-// and neither exists on Windows. The sandbox module is also the only
-// thing that pulls in the Unix-only libc rlimit APIs, so gating the
-// whole module tree keeps a single Windows build clean. The cross-
-// platform compute path above still works fine without them.
+// The serve path needs bubblewrap, unix sockets, and libc rlimits, none of
+// which exist on Windows. Compute still works there.
 #[cfg(unix)]
 mod sandbox;
 #[cfg(unix)]
@@ -22,13 +19,11 @@ use state::NodeState;
 
 #[tokio::main]
 async fn main() {
-    // try loading .env from the current dir first, then fall back to the parent
-    // directory so `cargo run` works from inside node/ too
+    // Fall back to the parent directory so `cargo run` works from inside node/.
     if dotenvy::dotenv().is_err() {
         let _ = dotenvy::from_filename("../.env");
     }
 
-    // ── 2. Read config ──────────────────────────────────────────────────
     let mut cfg = NodeConfig::from_env();
 
     // The CLI uses this to register the machine and immediately exit, so it can
@@ -40,7 +35,7 @@ async fn main() {
 
     eprintln!("[node] server_url = {}", cfg.server_url);
 
-    // ── 3. Register if this is a first boot (no saved identity) ─────────
+    // First boot: no saved identity, so register.
     if cfg.node_id.is_empty() {
         eprintln!("[node] no saved node identity — starting registration…");
         match registration::register_node(&cfg.server_url, &cfg.private_key_path).await {
@@ -67,7 +62,6 @@ async fn main() {
         return;
     }
 
-    // ── 4. Load RSA private key ─────────────────────────────────────────
     let private_key = match crypto::load_private_key(&cfg.private_key_path) {
         Ok(k) => k,
         Err(e) => {
@@ -79,16 +73,12 @@ async fn main() {
         }
     };
 
-    // ── 5. Spawn background health loop ─────────────────────────────────
     let health_cfg = cfg.clone();
     tokio::spawn(async move {
         health::health_loop(health_cfg).await;
     });
 
-    // Also run the web-hosting side: claim serve deployments and proxy their
-    // traffic. It shares the node's identity and only talks out to the server.
-    // Linux/macOS only -- the bwrap sandbox and the per-app socket behind it
-    // don't exist on Windows. The compute path above runs there just fine.
+    // The web-hosting side: claim serve deployments and proxy their traffic.
     #[cfg(unix)]
     {
         let serve_cfg = cfg.clone();
@@ -100,7 +90,6 @@ async fn main() {
     eprintln!("[node] health loop started (every 3 s)");
     eprintln!("[node] entering task claim loop…");
 
-    // ── 6. Run the main task loop, with graceful shutdown ───────────────
     tokio::select! {
         _ = worker::task_loop(&cfg, &private_key) => {
             // task_loop runs forever; this arm only fires if it somehow returns.

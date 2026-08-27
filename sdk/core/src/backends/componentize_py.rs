@@ -1,12 +1,6 @@
 //! A compile backend that drives `componentize-py` to turn a Python task into a
-//! WASM component.
-//!
-//! componentize-py is a real, maintained toolchain that freezes a Python module
-//! (and its pure-Python dependencies) into a self-contained component. We don't
-//! reimplement any of that. The backend's job is small and clear: wrap the
-//! user's function in a tiny shim that speaks Tandem's `run` contract, invoke
-//! componentize-py, and hand the bytes back to the engine for validation and
-//! caching.
+//! WASM component: wrap the user's function in a shim that speaks Tandem's
+//! `run` contract, invoke the toolchain, hand the bytes back to the engine.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,12 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::artifact::Artifact;
 use crate::compile::{finalize_artifact, CompileBackend, CompileError, CompileRequest};
 
-/// The shim we generate and hand to componentize-py.
-///
-/// componentize-py expects the app module to expose a class named `WitWorld`
-/// that implements the target world's exports. Ours just adapts Tandem's JSON
-/// `run` contract to whatever function the user marked: decode `[args, kwargs]`,
-/// call the function, encode the result.
+/// The shim we generate and hand to componentize-py, which expects a `WitWorld`
+/// class implementing the target world's exports.
 const ENTRY_SHIM_TEMPLATE: &str = r#"import json
 import importlib
 
@@ -43,9 +33,8 @@ class WitWorld:
 
 /// Hands Python tasks to componentize-py to produce WASM components.
 pub struct ComponentizePyBackend {
-    /// How to invoke componentize-py, e.g. `["componentize-py"]` or
-    /// `["/some/env/bin/componentize-py"]`. Kept as a list so a caller can also
-    /// pass something like `["python", "-m", "componentize_py"]`.
+    /// How to invoke componentize-py. A list, so a caller can also pass
+    /// something like `["python", "-m", "componentize_py"]`.
     command: Vec<String>,
     /// Directory that contains Tandem's WIT (the folder holding `task.wit`).
     wit_dir: PathBuf,
@@ -77,7 +66,6 @@ impl CompileBackend for ComponentizePyBackend {
     }
 
     fn is_available(&self) -> bool {
-        // If `componentize-py --version` runs and succeeds, the toolchain is there.
         self.base_command()
             .arg("--version")
             .output()
@@ -86,19 +74,16 @@ impl CompileBackend for ComponentizePyBackend {
     }
 
     fn compile(&self, request: &CompileRequest) -> Result<Artifact, CompileError> {
-        // Work in a fresh temp directory so the generated shim and the output
-        // never clutter the user's project.
+        // A fresh temp dir, so the shim and output never touch the user's project.
         let work_dir = make_temp_dir()?;
         let result = self.compile_in(&work_dir, request);
-        // Always clean up the scratch space, even if the compile failed.
         let _ = fs::remove_dir_all(&work_dir);
         result
     }
 }
 
 impl ComponentizePyBackend {
-    /// The real work of `compile`, split out so the caller can clean up the temp
-    /// directory whether this succeeds or fails.
+    /// Split out of `compile` so the temp directory is cleaned up either way.
     fn compile_in(
         &self,
         work_dir: &Path,
@@ -115,7 +100,6 @@ impl ComponentizePyBackend {
             .arg("task")
             .arg("componentize")
             .arg("_tandem_entry")
-            // Look for the shim here and the user's source there.
             .arg("-p")
             .arg(work_dir)
             .arg("-p")
@@ -178,7 +162,6 @@ mod tests {
         let shim = fs::read_to_string(dir.join("_tandem_entry.py")).unwrap();
         let _ = fs::remove_dir_all(&dir);
 
-        // The placeholders should be filled in with the user's module and function.
         assert!(shim.contains("import_module(\"my_app\")"));
         assert!(shim.contains("getattr(_user_module, \"do_work\")"));
         assert!(!shim.contains("__MODULE__"));

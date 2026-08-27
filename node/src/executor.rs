@@ -24,21 +24,15 @@ pub struct ExecutionResult {
 /// Default fuel budget when no timeout is specified (1 billion units).
 const DEFAULT_FUEL: u64 = 1_000_000_000;
 
-/// The four bytes that mark a WASM binary as a component rather than a classic
-/// core module. Both start with the same `\0asm` magic, but the version/layer
-/// bytes differ, which is all we need to tell them apart.
+/// The version/layer bytes that follow `\0asm` in a component, as opposed to
+/// `01 00 00 00` in a core module.
 const COMPONENT_VERSION: [u8; 4] = [0x0d, 0x00, 0x01, 0x00];
 
 /// Execute a WASM binary in a sandboxed Wasmtime runtime.
 ///
-/// * `payload` — the (potentially decrypted) TNDM-framed payload: the WASM
-///   bytes followed by the JSON input fed to the guest on stdin.
-/// * `timeout_ms` — optional timeout hint; converted to a fuel budget
-///   (`timeout_ms × 10 000`).
-///
-/// The bytes might be a modern component (what the new compile engine emits) or
-/// a classic core module (what the old py2wasm path produced), so we look at the
-/// header and run whichever one it is.
+/// `payload` is the (decrypted) TNDM-framed payload: the WASM bytes followed by
+/// the JSON input fed to the guest. `timeout_ms` becomes a fuel budget of
+/// `timeout_ms × 10 000`.
 pub fn execute_wasm(
     payload: &[u8],
     timeout_ms: Option<u64>,
@@ -66,20 +60,15 @@ pub fn execute_wasm(
     }
 }
 
-/// Is this a WASM component? Components carry a distinct version/layer in the
-/// four bytes right after the `\0asm` magic.
 fn is_component(wasm_bytes: &[u8]) -> bool {
     wasm_bytes.len() >= 8 && wasm_bytes[4..8] == COMPONENT_VERSION
 }
 
-/// A clock that always reads the same instant, for every guest on every node.
+/// A clock frozen at the Unix epoch, so a guest can't read the real time.
 ///
-/// The server checks a sample of tasks by running them on three nodes and
-/// comparing output hashes, and it permanently bans whoever disagrees with the
-/// majority. A guest that can read the real time therefore gets honest nodes
-/// banned for doing nothing wrong -- they just happened to run a second apart.
-/// Handing every node the same frozen instant takes the clock away as a way to
-/// tell them apart.
+/// Verification reruns a task on three nodes and bans whoever disagrees with
+/// the majority, so a guest that sees the host clock gets honest nodes banned
+/// for running a second apart.
 struct FrozenClock;
 
 impl HostWallClock for FrozenClock {
@@ -87,9 +76,6 @@ impl HostWallClock for FrozenClock {
         Duration::from_secs(1)
     }
 
-    /// The Unix epoch. Obviously not the real date, and that's deliberate: a
-    /// task that depends on the time notices straight away instead of quietly
-    /// disagreeing with the node next door.
     fn now(&self) -> Duration {
         Duration::ZERO
     }
@@ -100,27 +86,23 @@ impl HostMonotonicClock for FrozenClock {
         1_000_000_000
     }
 
-    // ponytail: frozen rather than ticking, so a guest that spins waiting for
-    // the clock to move burns its fuel budget instead of finishing. Swap in an
-    // atomic counter that ticks once per read if a task ever genuinely needs
-    // elapsed time.
+    // ponytail: frozen rather than ticking, so a guest spinning on elapsed time
+    // burns its fuel budget. Swap in an atomic counter if a task needs it.
     fn now(&self) -> u64 {
         0
     }
 }
 
-/// Start a WASI context that behaves the same way on every node.
+/// A WASI context that behaves identically on every node: frozen clocks, and
+/// both random interfaces seeded from the task input.
 ///
-/// Wasmtime's default context wires the guest straight through to the host's
-/// clock and entropy pool, which is exactly what redundant execution can't
-/// live with. We freeze the clocks and seed both random interfaces from the
-/// task's own input, so two nodes running the same task see the same "random"
-/// numbers and the same "now" -- while two different tasks (say, two shards of
-/// one split) still get different streams.
+/// Wasmtime's default wires the guest to the host clock and entropy pool, which
+/// redundant execution can't live with. Seeding from the input keeps two nodes
+/// running the same task in step while different tasks still get different
+/// streams.
 fn deterministic_wasi_builder(input_bytes: &[u8]) -> WasiCtxBuilder {
     let secure_seed = crypto::sha256_bytes(input_bytes);
-    // A second, separate seed so a guest reading both random interfaces doesn't
-    // get the same bytes twice.
+    // Separate seed, so reading both interfaces doesn't hand back the same bytes.
     let insecure_seed = crypto::sha256_bytes(&secure_seed);
 
     let mut builder = WasiCtxBuilder::new();
@@ -136,12 +118,8 @@ fn deterministic_wasi_builder(input_bytes: &[u8]) -> WasiCtxBuilder {
 }
 
 /// Turn a wasmtime run error into our own error, treating a clean WASI exit as
-/// success.
-///
-/// A normal WASI program finishes by calling `proc_exit`, which wasmtime hands
-/// back as an `I32Exit` rather than a plain return. Exit status 0 means "ran
-/// fine", so we swallow it; any other status, a fuel-exhaustion trap, or a real
-/// trap becomes an error the caller can report.
+/// success: a normal WASI program finishes by calling `proc_exit`, which comes
+/// back as an `I32Exit` rather than a plain return.
 fn interpret_run_error(err: wasmtime::Error) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(exit) = err.downcast_ref::<wasmtime_wasi::I32Exit>() {
         if exit.0 == 0 {
@@ -157,23 +135,19 @@ fn interpret_run_error(err: wasmtime::Error) -> Result<(), Box<dyn std::error::E
     Err(format!("WASM trap: {msg}").into())
 }
 
-/// Run a classic core WASM module through WASI preview1. This is the original
-/// execution path, unchanged; it still handles anything the old toolchain
-/// produced and anything that compiles to a plain core module.
+/// Run a classic core WASM module through WASI preview1: stdin in, stdout
+/// captured, no filesystem or sockets.
 fn run_core_module(
     wasm_bytes: &[u8],
     input_bytes: &[u8],
     fuel_budget: u64,
 ) -> Result<ExecutionResult, Box<dyn std::error::Error>> {
-    // Engine with fuel metering.
     let mut engine_config = Config::new();
     engine_config.consume_fuel(true);
     let engine = Engine::new(&engine_config)?;
 
-    // Compile module from in-memory bytes (never from disk).
     let module = Module::from_binary(&engine, wasm_bytes)?;
 
-    // WASI context — minimal surface: stdin in, stdout captured.
     let stdout_buf = wasmtime_wasi::pipe::MemoryOutputPipe::new(1024 * 1024); // 1 MiB cap
     let stdin_buf = wasmtime_wasi::pipe::MemoryInputPipe::new(input_bytes.to_vec());
 
@@ -182,34 +156,27 @@ fn run_core_module(
         .stdout(stdout_buf.clone())
         .build_p1();
 
-    // Store with fuel budget.
     let mut store = Store::new(&engine, wasi_ctx);
     store.set_fuel(fuel_budget)?;
 
-    // Link WASI imports.
     let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
     wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |ctx| ctx)?;
 
-    // Instantiate & run.
     let instance = linker.instantiate(&mut store, &module)?;
 
-    // Try `_start` (WASI command convention) or `tandem_entry` (Tandem Python SDK convention).
+    // `_start` is the WASI command convention, `tandem_entry` the Python SDK's.
     let start = instance
         .get_typed_func::<(), ()>(&mut store, "_start")
         .or_else(|_| instance.get_typed_func::<(), ()>(&mut store, "tandem_entry"))
         .map_err(|_| "module does not export a `_start` or `tandem_entry` function")?;
 
-    // A normal WASI program ends by calling `proc_exit`, so a clean exit(0)
-    // arrives here as an error that `interpret_run_error` treats as success.
     if let Err(err) = start.call(&mut store, ()) {
         interpret_run_error(err)?;
     }
 
-    // Collect results.
     let fuel_remaining = store.get_fuel()?;
     let instruction_count = fuel_budget.saturating_sub(fuel_remaining);
 
-    // Hash the first linear memory (if present).
     let memory_hash = if let Some(memory) = instance.get_memory(&mut store, "memory") {
         let data = memory.data(&store);
         crypto::sha256_hex(data)
@@ -217,10 +184,8 @@ fn run_core_module(
         crypto::sha256_hex(&[])
     };
 
-    // Drop store to release references to WASI pipes.
+    // Dropping the store releases the WASI pipes, so stdout can be taken out.
     drop(store);
-
-    // Capture stdout.
     let output: Vec<u8> = stdout_buf.try_into_inner().unwrap_or_default().into();
 
     Ok(ExecutionResult {
@@ -230,8 +195,7 @@ fn run_core_module(
     })
 }
 
-/// The host state a component's WASI imports run against. It just holds the
-/// WASI context plus the resource table wasmtime needs for the component model.
+/// The host state a component's WASI imports run against.
 struct ComponentHost {
     ctx: WasiCtx,
     table: ResourceTable,
@@ -251,13 +215,9 @@ impl WasiView for ComponentHost {
 
 /// Run a WASM component (the wasip2 world) by calling its `run` export.
 ///
-/// Every Tandem task component, whatever language it came from, exports the
-/// same tiny contract: `run(list<u8>) -> list<u8>` — the JSON input bytes go in,
-/// the JSON result bytes come out. We call it by name through the dynamic
-/// component API so the node doesn't need the WIT definition at build time.
-///
-/// This is a plain blocking call using the synchronous WASI linker, which keeps
-/// it easy to run from the worker's `spawn_blocking` context.
+/// Every Tandem task component exports the same contract whatever language it
+/// came from: `run(list<u8>) -> list<u8>`, JSON in, JSON out. We call it by name
+/// through the dynamic component API so the node needs no WIT at build time.
 fn run_component(
     wasm_bytes: &[u8],
     input_bytes: &[u8],
@@ -269,11 +229,8 @@ fn run_component(
 
     let component = Component::from_binary(&engine, wasm_bytes)?;
 
-    // Give the component the standard WASI surface it imports, but no real files
-    // or sockets: a compute task only ever gets its input and returns its output.
-    // stderr is captured (not inherited) so that if the guest traps -- e.g. an
-    // unhandled Python exception, since our WIT contract has no error variant --
-    // we can surface whatever it printed instead of just the opaque wasmtime trap.
+    // stderr is captured rather than inherited: our WIT contract has no error
+    // variant, so a traceback here is all we can report on a trap.
     let stderr_buf = wasmtime_wasi::pipe::MemoryOutputPipe::new(64 * 1024);
     let ctx = deterministic_wasi_builder(input_bytes)
         .stderr(stderr_buf.clone())
@@ -294,14 +251,10 @@ fn run_component(
         .get_func(&mut store, "run")
         .ok_or("component does not export a `run` function")?;
 
-    // Hand the input bytes to `run` as a `list<u8>` and make room for the one
-    // `list<u8>` it returns.
     let input_val = Val::List(input_bytes.iter().map(|byte| Val::U8(*byte)).collect());
     let mut results = [Val::Bool(false)];
 
     if let Err(err) = run.call(&mut store, &[input_val], &mut results) {
-        // A fuel-exhaustion or real trap becomes an error here; a clean exit(0)
-        // would leave us without a result, which is still a failure for a task.
         let stderr_text = String::from_utf8_lossy(&stderr_buf.contents()).into_owned();
         interpret_run_error(err).map_err(|e| -> Box<dyn std::error::Error> {
             if stderr_text.trim().is_empty() {
@@ -312,7 +265,6 @@ fn run_component(
         })?;
         return Err("component `run` did not return a result".into());
     }
-    // Let the guest run any cleanup it registered for after returning.
     run.post_return(&mut store)?;
 
     let output: Vec<u8> = match &results[0] {
@@ -331,9 +283,8 @@ fn run_component(
 
     drop(store);
 
-    // Components don't expose a single linear memory the way core modules do, so
-    // the memory hash is best-effort here. The output hash, fuel count, and the
-    // signed execution receipt are what actually guard against tampering.
+    // Components expose no single linear memory, so there's nothing to hash. The
+    // output hash, fuel count, and signed receipt are what guard against tampering.
     let memory_hash = crypto::sha256_hex(&[]);
 
     Ok(ExecutionResult {
@@ -347,18 +298,14 @@ fn run_component(
 mod tests {
     use super::*;
 
-    // A wasip1 core module built from a tiny "echo" program (reads stdin, writes
-    // it back), used to check the classic core-module path still works.
+    // A wasip1 core module that echoes stdin.
     const ECHO_MODULE: &[u8] = include_bytes!("../tests/fixtures/echo_module.wasm");
 
-    // A real wasip2 component that implements Tandem's `run(list<u8>) -> list<u8>`
-    // contract as an echo, used to check the component run-export path.
+    // A wasip2 component that echoes through Tandem's `run` contract.
     const TASK_COMPONENT: &[u8] = include_bytes!("../tests/fixtures/task_run_component.wasm");
 
-    // A guest that does nothing but read the two things a node has no business
-    // varying: 32 bytes of randomness and the wall clock. Both land in linear
-    // memory, so the memory hash `run_core_module` already computes tells us
-    // whether two runs saw the same values.
+    // Reads randomness and the wall clock into linear memory, so the memory hash
+    // `run_core_module` computes tells us whether two runs saw the same values.
     const NONDETERMINISM_PROBE: &str = r#"
         (module
           (import "wasi_snapshot_preview1" "random_get"
@@ -371,8 +318,7 @@ mod tests {
             (drop (call $clock_time_get (i32.const 0) (i64.const 0) (i32.const 64)))))
     "#;
 
-    // Frame wasm bytes and the task input the way the rest of Tandem frames a
-    // payload: the "TNDM" magic, a little-endian wasm length, the wasm, then the input.
+    // "TNDM" magic, little-endian wasm length, the wasm, then the input.
     fn frame(wasm: &[u8], input: &[u8]) -> Vec<u8> {
         let mut payload = Vec::new();
         payload.extend_from_slice(b"TNDM");
@@ -408,14 +354,13 @@ mod tests {
     fn the_guest_sees_the_same_clock_and_randomness_every_run() {
         let probe = wat::parse_str(NONDETERMINISM_PROBE).expect("probe should assemble");
 
-        // Same task, run twice: this is what verification compares across three
-        // nodes, so it has to come out identical or an honest node gets banned.
+        // Same task twice: what verification compares across three nodes.
         let first = execute_wasm(&frame(&probe, b"task input"), None).expect("probe should run");
         let second = execute_wasm(&frame(&probe, b"task input"), None).expect("probe should run");
         assert_eq!(first.memory_hash, second.memory_hash);
 
         // A different task still gets its own randomness, or every shard of a
-        // split would compute with the same "random" numbers.
+        // split would compute with the same numbers.
         let other = execute_wasm(&frame(&probe, b"other input"), None).expect("probe should run");
         assert_ne!(first.memory_hash, other.memory_hash);
     }

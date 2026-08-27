@@ -312,13 +312,26 @@ def _resolve_init_values(
     return config_path, project_name, entry, output_dir, resolved_version
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="tandem",
-        description="Discover Tandem SDK tasks, build `.wasm` artifacts, and run them through a Tandem server.",
+def _add_config_path(parser: argparse.ArgumentParser) -> None:
+    """Add the optional positional `config_path` that most commands take."""
+    parser.add_argument(
+        "config_path",
+        nargs="?",
+        default=os.environ.get("TANDEM_CONFIG_PATH", "tandem.toml"),
+        help="Path to the Tandem TOML config. Defaults to tandem.toml.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
 
+
+def _add_node_server_url(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--server-url",
+        default=None,
+        help="Server the node should connect to. Defaults to your saved server URL.",
+    )
+
+
+def _add_project_commands(subparsers) -> None:
+    """Working on a project locally: init, inspect, manifest, build."""
     init_parser = subparsers.add_parser(
         "init", help="Create a new Tandem project TOML file."
     )
@@ -348,116 +361,120 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Project version. Defaults to `0.1.0`.",
     )
+    init_parser.set_defaults(func=_cmd_init)
 
     inspect_parser = subparsers.add_parser(
         "inspect", help="Load a project, discover tasks, and print analysis output."
     )
-    inspect_parser.add_argument(
-        "config_path",
-        nargs="?",
-        default=os.environ.get("TANDEM_CONFIG_PATH", "tandem.toml"),
-        help="Path to the Tandem TOML config. Defaults to tandem.toml.",
-    )
+    _add_config_path(inspect_parser)
+    inspect_parser.set_defaults(func=_cmd_inspect)
 
     manifest_parser = subparsers.add_parser(
         "manifest",
         help="Print the generated manifest JSON to stdout without writing files.",
     )
-    manifest_parser.add_argument(
-        "config_path",
-        nargs="?",
-        default=os.environ.get("TANDEM_CONFIG_PATH", "tandem.toml"),
-        help="Path to the Tandem TOML config. Defaults to tandem.toml.",
-    )
+    _add_config_path(manifest_parser)
+    manifest_parser.set_defaults(func=_cmd_manifest)
 
     build_parser = subparsers.add_parser(
         "build",
         help="Validate the project and emit `.wasm` artifacts plus `.tandem/manifest.json`.",
     )
-    build_parser.add_argument(
-        "config_path",
-        nargs="?",
-        default=os.environ.get("TANDEM_CONFIG_PATH", "tandem.toml"),
-        help="Path to the Tandem TOML config. Defaults to tandem.toml.",
-    )
+    _add_config_path(build_parser)
     build_parser.add_argument(
         "--allow-analysis-errors",
         action="store_true",
         help="Write artifacts even if static validation reports errors.",
     )
+    build_parser.set_defaults(func=_cmd_build)
 
+
+def _add_auth_commands(subparsers) -> None:
     auth_parser = subparsers.add_parser(
         "auth",
         help="Manage Tandem authentication (login, logout, register, status).",
     )
     auth_subparsers = auth_parser.add_subparsers(dest="auth_command", required=True)
 
-    auth_register_parser = auth_subparsers.add_parser(
+    register_parser = auth_subparsers.add_parser(
         "register",
         help="Create a new Tandem account and store credentials securely in the OS keyring.",
     )
-    _add_auth_options(auth_register_parser)
+    _add_auth_options(register_parser)
+    register_parser.set_defaults(func=_cmd_auth_register)
 
-    auth_login_parser = auth_subparsers.add_parser(
+    login_parser = auth_subparsers.add_parser(
         "login",
         help="Authenticate with Tandem and store JWT tokens securely in the OS keyring.",
     )
-    _add_auth_options(auth_login_parser, include_rotate=True)
+    _add_auth_options(login_parser, include_rotate=True)
+    login_parser.set_defaults(func=_cmd_auth_login)
 
-    auth_logout_parser = auth_subparsers.add_parser(
+    logout_parser = auth_subparsers.add_parser(
         "logout",
         help="Revoke the current session on the server and clear all local credentials.",
     )
-    auth_logout_parser.add_argument(
+    logout_parser.add_argument(
         "--server-url",
         default=None,
         help="Server base URL. Falls back to stored server URL or https://tandem.wnusair.org.",
     )
+    logout_parser.set_defaults(func=_cmd_auth_logout)
 
     auth_subparsers.add_parser(
         "status",
         help="Show the currently authenticated user and session info.",
-    )
+    ).set_defaults(func=_cmd_auth_status)
 
+
+def _add_settings_commands(subparsers) -> None:
     settings_parser = subparsers.add_parser(
         "settings",
         help="View or change local CLI settings, like which server to talk to.",
     )
-    settings_subparsers = settings_parser.add_subparsers(dest="settings_command", required=True)
+    settings_subparsers = settings_parser.add_subparsers(
+        dest="settings_command", required=True
+    )
 
     settings_subparsers.add_parser(
         "show",
         help="Show the server URL currently in effect, and where it came from.",
-    )
+    ).set_defaults(func=_cmd_settings_show)
 
-    settings_set_server_url_parser = settings_subparsers.add_parser(
+    set_server_url_parser = settings_subparsers.add_parser(
         "set-server-url",
         help="Save a server URL so you don't need --server-url on every command.",
     )
-    settings_set_server_url_parser.add_argument(
+    set_server_url_parser.add_argument(
         "server_url",
         help="Server base URL, e.g. https://tandem.example.com or http://127.0.0.1:6767",
     )
+    set_server_url_parser.set_defaults(func=_cmd_settings_set_server_url)
 
     settings_subparsers.add_parser(
         "reset-server-url",
         help="Remove the saved server URL, reverting to TANDEM_SERVER_URL/SERVER_URL or the default.",
-    )
+    ).set_defaults(func=_cmd_settings_reset_server_url)
 
-    settings_set_registration_token_parser = settings_subparsers.add_parser(
+    set_registration_token_parser = settings_subparsers.add_parser(
         "set-registration-token",
         help="For headless nodes only. Logged-in users don't need this.",
     )
-    settings_set_registration_token_parser.add_argument(
+    set_registration_token_parser.add_argument(
         "registration_token",
         help="The bearer token your server's TANDEM_NODE_REGISTRATION_TOKEN is set to.",
+    )
+    set_registration_token_parser.set_defaults(
+        func=_cmd_settings_set_registration_token
     )
 
     settings_subparsers.add_parser(
         "reset-registration-token",
         help="Remove the saved registration token, reverting to TANDEM_NODE_REGISTRATION_TOKEN or none.",
-    )
+    ).set_defaults(func=_cmd_settings_reset_registration_token)
 
+
+def _add_sdk_commands(subparsers) -> None:
     sdk_parser = subparsers.add_parser(
         "sdk",
         help="Browse and fetch Tandem SDKs from the server's registry. Requires `tandem auth login`.",
@@ -467,63 +484,53 @@ def _build_parser() -> argparse.ArgumentParser:
     sdk_subparsers.add_parser(
         "list",
         help="List SDKs (and their versions) available on the server.",
+    ).set_defaults(func=_cmd_sdk_list)
+
+    name_help = (
+        "SDK name from `tandem sdk list`. Auto-selects when only one SDK is available."
     )
 
-    sdk_install_parser = sdk_subparsers.add_parser(
+    install_parser = sdk_subparsers.add_parser(
         "install",
         help="Pip install a Tandem SDK into the current Python environment.",
     )
-    sdk_install_parser.add_argument(
-        "name",
-        nargs="?",
-        default=None,
-        help="SDK name from `tandem sdk list`. Auto-selects when only one SDK is available.",
-    )
-    sdk_install_parser.add_argument(
+    install_parser.add_argument("name", nargs="?", default=None, help=name_help)
+    install_parser.add_argument(
         "--python",
         default=None,
         help="Python interpreter to install into. Defaults to the active virtualenv, "
         "falling back to the first `python3`/`python` found on PATH.",
     )
+    install_parser.set_defaults(func=_cmd_sdk_install)
 
-    sdk_download_parser = sdk_subparsers.add_parser(
+    download_parser = sdk_subparsers.add_parser(
         "download",
         help="Copy an SDK's source into a local folder without installing it.",
     )
-    sdk_download_parser.add_argument(
-        "name",
-        nargs="?",
-        default=None,
-        help="SDK name from `tandem sdk list`. Auto-selects when only one SDK is available.",
-    )
-    sdk_download_parser.add_argument(
+    download_parser.add_argument("name", nargs="?", default=None, help=name_help)
+    download_parser.add_argument(
         "--output",
         default=None,
         help="Directory to copy the SDK source into. Defaults to ./<name>.",
     )
+    download_parser.set_defaults(func=_cmd_sdk_download)
 
+
+def _add_run_commands(subparsers) -> None:
+    """Running a project against a server, and checking on it afterwards."""
     deploy_parser = subparsers.add_parser(
         "deploy",
         help="Create a deployment on the server and print its pid.",
     )
-    deploy_parser.add_argument(
-        "config_path",
-        nargs="?",
-        default=os.environ.get("TANDEM_CONFIG_PATH", "tandem.toml"),
-        help="Path to the Tandem TOML config. Defaults to tandem.toml.",
-    )
+    _add_config_path(deploy_parser)
     _add_remote_options(deploy_parser)
+    deploy_parser.set_defaults(func=_cmd_deploy)
 
     start_parser = subparsers.add_parser(
         "start",
         help="Build the project, upload its `.wasm` artifacts, and optionally wait for results.",
     )
-    start_parser.add_argument(
-        "config_path",
-        nargs="?",
-        default=os.environ.get("TANDEM_CONFIG_PATH", "tandem.toml"),
-        help="Path to the Tandem TOML config. Defaults to tandem.toml.",
-    )
+    _add_config_path(start_parser)
     start_parser.add_argument(
         "--pid",
         default=None,
@@ -546,27 +553,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seconds between result polls while waiting.",
     )
     _add_remote_options(start_parser)
+    start_parser.set_defaults(func=_cmd_start)
 
     clean_parser = subparsers.add_parser(
         "clean", help="Remove generated build artifacts."
     )
-    clean_parser.add_argument(
-        "config_path",
-        nargs="?",
-        default=os.environ.get("TANDEM_CONFIG_PATH", "tandem.toml"),
-        help="Path to the Tandem TOML config. Defaults to tandem.toml.",
-    )
+    _add_config_path(clean_parser)
+    clean_parser.set_defaults(func=_cmd_clean)
 
     subparsers.add_parser(
         "status",
         help="Show your login and whether the Tandem node is running.",
-    )
+    ).set_defaults(func=_cmd_status)
 
     usage_parser = subparsers.add_parser(
         "usage",
         help="Show how much of your account's resource limits you're using.",
     )
     _add_remote_options(usage_parser)
+    usage_parser.set_defaults(func=_cmd_usage)
 
     serve_parser = subparsers.add_parser(
         "serve",
@@ -591,108 +596,86 @@ def _build_parser() -> argparse.ArgumentParser:
         help="How many nodes to run the app on. Default 2.",
     )
     _add_remote_options(serve_parser)
+    serve_parser.set_defaults(func=_cmd_serve)
 
+
+def _add_node_commands(subparsers) -> None:
     node_parser = subparsers.add_parser(
         "node",
         help="Run and manage the background Tandem node on this machine.",
     )
     node_subparsers = node_parser.add_subparsers(dest="node_command", required=True)
 
-    node_start_parser = node_subparsers.add_parser(
+    start_parser = node_subparsers.add_parser(
         "start",
         help="Start the node in the background, registering it the first time.",
     )
-    node_start_parser.add_argument(
-        "--server-url",
-        default=None,
-        help="Server the node should connect to. Defaults to your saved server URL.",
-    )
+    _add_node_server_url(start_parser)
+    start_parser.set_defaults(func=_cmd_node_start)
 
     node_subparsers.add_parser(
         "stop",
         help="Stop the background node.",
-    )
+    ).set_defaults(func=_cmd_node_stop)
 
-    node_restart_parser = node_subparsers.add_parser(
+    restart_parser = node_subparsers.add_parser(
         "restart",
         help="Stop and start the background node.",
     )
-    node_restart_parser.add_argument(
-        "--server-url",
-        default=None,
-        help="Server the node should connect to. Defaults to your saved server URL.",
-    )
+    _add_node_server_url(restart_parser)
+    restart_parser.set_defaults(func=_cmd_node_restart)
 
     node_subparsers.add_parser(
         "status",
         help="Show whether the node is running, its id, and how it's running.",
-    )
+    ).set_defaults(func=_cmd_node_status)
 
-    node_logs_parser = node_subparsers.add_parser(
+    logs_parser = node_subparsers.add_parser(
         "logs",
         help="Print the most recent lines from the node's log.",
     )
-    node_logs_parser.add_argument(
+    logs_parser.add_argument(
         "--lines",
         type=int,
         default=40,
         help="How many lines from the end of the log to show. Defaults to 40.",
     )
+    logs_parser.set_defaults(func=_cmd_node_logs)
 
-    node_enable_parser = node_subparsers.add_parser(
+    enable_parser = node_subparsers.add_parser(
         "enable",
         help="Run the node 24/7 as an OS service (starts on boot, restarts on crash).",
     )
-    node_enable_parser.add_argument(
-        "--server-url",
-        default=None,
-        help="Server the node should connect to. Defaults to your saved server URL.",
-    )
+    _add_node_server_url(enable_parser)
+    enable_parser.set_defaults(func=_cmd_node_enable)
 
     node_subparsers.add_parser(
         "disable",
         help="Turn off the 24/7 OS service, going back to manual start/stop.",
+    ).set_defaults(func=_cmd_node_disable)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="tandem",
+        description="Discover Tandem SDK tasks, build `.wasm` artifacts, and run them through a Tandem server.",
     )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Every group attaches its own `func`, and the sub-command groups are all
+    # required, so parse_args() always lands on exactly one leaf and main() can
+    # just call args.func. The call order is the order `--help` lists them in.
+    _add_project_commands(subparsers)
+    _add_auth_commands(subparsers)
+    _add_settings_commands(subparsers)
+    _add_sdk_commands(subparsers)
+    _add_run_commands(subparsers)
+    _add_node_commands(subparsers)
 
     subparsers.add_parser(
         "uninstall",
         help="Completely remove Tandem from this machine (asks you to confirm a code).",
-    )
-
-    # Each leaf sub-command runs one function. The sub-command groups are all
-    # required, so parse_args() always lands on exactly one of these and main()
-    # can just call args.func. Listing them here keeps every command next to the
-    # handler that runs it.
-    init_parser.set_defaults(func=_cmd_init)
-    inspect_parser.set_defaults(func=_cmd_inspect)
-    manifest_parser.set_defaults(func=_cmd_manifest)
-    build_parser.set_defaults(func=_cmd_build)
-    auth_register_parser.set_defaults(func=_cmd_auth_register)
-    auth_login_parser.set_defaults(func=_cmd_auth_login)
-    auth_logout_parser.set_defaults(func=_cmd_auth_logout)
-    auth_subparsers.choices["status"].set_defaults(func=_cmd_auth_status)
-    settings_subparsers.choices["show"].set_defaults(func=_cmd_settings_show)
-    settings_set_server_url_parser.set_defaults(func=_cmd_settings_set_server_url)
-    settings_subparsers.choices["reset-server-url"].set_defaults(func=_cmd_settings_reset_server_url)
-    settings_set_registration_token_parser.set_defaults(func=_cmd_settings_set_registration_token)
-    settings_subparsers.choices["reset-registration-token"].set_defaults(func=_cmd_settings_reset_registration_token)
-    sdk_subparsers.choices["list"].set_defaults(func=_cmd_sdk_list)
-    sdk_install_parser.set_defaults(func=_cmd_sdk_install)
-    sdk_download_parser.set_defaults(func=_cmd_sdk_download)
-    deploy_parser.set_defaults(func=_cmd_deploy)
-    start_parser.set_defaults(func=_cmd_start)
-    clean_parser.set_defaults(func=_cmd_clean)
-    subparsers.choices["status"].set_defaults(func=_cmd_status)
-    usage_parser.set_defaults(func=_cmd_usage)
-    serve_parser.set_defaults(func=_cmd_serve)
-    node_start_parser.set_defaults(func=_cmd_node_start)
-    node_subparsers.choices["stop"].set_defaults(func=_cmd_node_stop)
-    node_restart_parser.set_defaults(func=_cmd_node_restart)
-    node_subparsers.choices["status"].set_defaults(func=_cmd_node_status)
-    node_logs_parser.set_defaults(func=_cmd_node_logs)
-    node_enable_parser.set_defaults(func=_cmd_node_enable)
-    node_subparsers.choices["disable"].set_defaults(func=_cmd_node_disable)
-    subparsers.choices["uninstall"].set_defaults(func=_cmd_uninstall)
+    ).set_defaults(func=_cmd_uninstall)
 
     return parser
 
@@ -1216,11 +1199,9 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # If the project has an install step, run it now. Your nodes run the app
-    # with no network, so anything it needs from pip (Flask, requests, ...) has
-    # to be installed into the project folder here first and shipped inside the
-    # bundle. A typical [build] install is something like:
-    #   pip install flask --target libs
+    # Nodes run the app with no network, so pip dependencies have to be
+    # installed into the project folder now and shipped inside the bundle
+    # (e.g. `pip install flask --target libs`).
     if config.build_install:
         print(f"Installing dependencies: {config.build_install}")
         install = subprocess.run(config.build_install, shell=True, cwd=str(config.project_root))

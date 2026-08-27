@@ -102,10 +102,9 @@ def verify_receipt(
     except Exception as exc:
         return False, f"Signature verification error: {exc}"
 
-    # 4. Signature checks out. The receipt carries an instruction_count too, but
-    #    it's node-reported and we don't bill on it -- quota is metered from the
-    #    server's own clock (see app.utils.quota). It stays in the signed message
-    #    only so the signature covers everything the node claimed.
+    # The receipt's instruction_count is node-reported and never billed on --
+    # quota is metered from the server's clock (see app.utils.quota). It stays
+    # in the signed message only so the signature covers every claim.
     return True, ""
 
 

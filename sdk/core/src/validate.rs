@@ -1,8 +1,6 @@
-//! Cheap, dependency-free checks on WASM bytes before we trust them.
-//!
-//! We don't need a full parser to answer the two questions that matter to the
-//! rest of Tandem: "is this really a WASM binary?" and "is it a component or a
-//! core module?". Both answers live in the first eight bytes of the file.
+//! Cheap, dependency-free checks on WASM bytes before we trust them. Both
+//! questions we care about -- is this WASM, and is it a component or a core
+//! module -- are answered by the first eight bytes.
 
 use crate::artifact::ArtifactKind;
 use crate::compile::CompileError;

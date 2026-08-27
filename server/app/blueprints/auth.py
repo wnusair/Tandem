@@ -37,9 +37,6 @@ logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 _ACCESS_TOKEN_TTL_SECONDS = 15 * 60          # 15 minutes
 _REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 3600   # 7 days
 _RATE_LIMIT_WINDOW_SECONDS = 60              # 1-minute window
@@ -47,9 +44,6 @@ _RATE_LIMIT_MAX_ATTEMPTS = 5                 # max attempts per window
 _MIN_PASSWORD_LENGTH = 10
 _MAX_API_KEY_GENERATION_ATTEMPTS = 10
 
-# ---------------------------------------------------------------------------
-# Key loading helpers
-# ---------------------------------------------------------------------------
 
 def _resolve_key_paths() -> tuple[Path, Path]:
     """Resolve private and public key paths, auto-generating them if absent."""
@@ -94,10 +88,6 @@ def _load_public_key():
     return serialization.load_pem_public_key(pub_path.read_bytes())
 
 
-# ---------------------------------------------------------------------------
-# Token issuance
-# ---------------------------------------------------------------------------
-
 def _issue_access_token(user: User) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -140,10 +130,6 @@ def _is_refresh_token_valid(user_id: int, jti: str) -> bool:
     return redis_client.exists(f"session:{user_id}:{jti}") == 1
 
 
-# ---------------------------------------------------------------------------
-# Rate limiting
-# ---------------------------------------------------------------------------
-
 def _rate_limit_key(endpoint: str) -> str:
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
     return f"ratelimit:{endpoint}:{ip}"
@@ -157,10 +143,6 @@ def _check_rate_limit(endpoint: str) -> bool:
         redis_client.expire(key, _RATE_LIMIT_WINDOW_SECONDS)
     return count <= _RATE_LIMIT_MAX_ATTEMPTS
 
-
-# ---------------------------------------------------------------------------
-# JWT verification decorator
-# ---------------------------------------------------------------------------
 
 def require_jwt(f):
     """Decorator that validates the Bearer JWT access token and sets g.current_user."""
@@ -188,10 +170,6 @@ def require_jwt(f):
         return f(*args, **kwargs)
     return decorated
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _json_data() -> dict:
     return request.get_json(silent=True) or {}
@@ -247,10 +225,6 @@ def _rotate_api_key_for_user(user: User) -> str:
     db.session.commit()
     return new_key
 
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 @auth_bp.route("/login", methods=["POST"])
 def login():

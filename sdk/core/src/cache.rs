@@ -1,9 +1,6 @@
-//! A small on-disk cache so we only compile the same thing once.
-//!
-//! Compiling with a real toolchain (like componentize-py) is slow, so the
-//! engine keys finished artifacts by a content hash of the request and reuses
-//! them. The cache is deliberately dumb: files named by their key, nothing
-//! fancy, and you can clear it by deleting the directory.
+//! A small on-disk cache so a real toolchain (componentize-py is slow) only
+//! runs once per distinct request. Files are named by their key, so clearing
+//! the cache means deleting the directory.
 
 use std::fs;
 use std::path::PathBuf;
@@ -25,11 +22,8 @@ impl BuildCache {
     }
 
     /// Build a stable cache key from the request plus a hash of its source.
-    ///
-    /// The source hash is passed in because how you hash a project (one file,
-    /// a whole directory) depends on the language backend. Everything that can
-    /// change the output is folded into the key so a stale entry never gets
-    /// reused by mistake.
+    /// Everything that can change the output is folded in, so a stale entry is
+    /// never reused.
     pub fn key_for(request: &CompileRequest, source_hash: &str) -> String {
         let mut material = String::new();
         material.push_str(&request.language);
@@ -55,11 +49,8 @@ impl BuildCache {
         self.root.join(format!("{key}.wasm"))
     }
 
-    /// Look for a cached artifact. Returns `None` on a miss.
-    ///
-    /// A missing or corrupt cache file is treated as a miss rather than an
-    /// error, so a bad entry can never wedge a build. We also re-validate the
-    /// bytes on the way out so we never trust a tampered cache file.
+    /// Look for a cached artifact. A missing or corrupt file counts as a miss
+    /// rather than an error, and the bytes are re-validated on the way out.
     pub fn get(&self, key: &str) -> Option<Artifact> {
         let path = self.path_for(key);
         let bytes = fs::read(&path).ok()?;

@@ -34,11 +34,9 @@ _REQUEST_TIMEOUT_SECONDS = 15
 
 _BUNDLED_SDKS_DIR = Path(__file__).resolve().parent / "_bundled" / "sdk"
 
-# Maps a server-registry SDK name to the folder holding a CLI-bundled copy of
-# its installable source. This is how "download" works without a real
-# server-side download endpoint yet -- the server still decides what
-# exists, this just answers "given a name the server confirmed, where's a
-# local copy of it?"
+# Where a CLI-bundled copy of each SDK's source lives. The server still decides
+# what exists; this only answers where the local copy of a confirmed name is,
+# since there's no server-side download endpoint yet.
 _LOCAL_SDK_BUNDLES: dict[str, Path] = {
     "tandem-python-sdk": _BUNDLED_SDKS_DIR / "python_sdk",
 }

@@ -35,12 +35,8 @@ class StartResult:
 
 
 def _resolve_server_url(server_url: str | None) -> str:
-    # One resolver for the whole CLI. Auth, deploy, start, and the node all point
-    # at the same server, resolved the same way: an explicit --server-url wins,
-    # then the saved setting, then TANDEM_SERVER_URL/SERVER_URL, then the default.
-    # This used to have its own localhost default separate from auth's, which is
-    # how the CLI could end up logging in to one server and deploying to another.
-    # Keeping it a thin wrapper means node_service can still import it by name.
+    # A thin wrapper (node_service imports it by name) so the whole CLI resolves
+    # the server the same way and can't log in to one server but deploy to another.
     return resolve_server_url(server_url)
 
 
@@ -179,12 +175,9 @@ def start_project(
             ),
         ]
 
-        # The node splits a task blob on the "TNDM" magic into the wasm module
-        # and the JSON input handed to the component's `run` export. `tandem
-        # start` runs each task once with no arguments, so we frame every wasm
-        # with an empty [args, kwargs]. Without this the node would hand `run`
-        # empty bytes and the task would trap on `json.loads(b"")`. Passing
-        # arguments to a specific task is what the SDK's `.submit()` is for.
+        # `tandem start` runs each task once with no arguments, so frame every
+        # wasm with an empty [args, kwargs] -- otherwise `run` gets empty bytes
+        # and traps on `json.loads(b"")`. Real arguments go through `.submit()`.
         empty_input = json.dumps([[], {}]).encode("utf-8")
         for wasm_path in build_result.wasm_paths:
             wasm_bytes = wasm_path.read_bytes()
@@ -335,10 +328,8 @@ def serve_deploy(
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as tar:
         tar.add(str(pathlib.Path(project_root)), arcname=".", filter=_filter)
-        # The serve sandbox launches the app with a bare `python3`, so bundle the
-        # SDK package next to the app (mirroring what `tandem build` stages).
-        # Without it the app's `import tandem` fails with ModuleNotFoundError on
-        # the node.
+        # The sandbox launches the app with a bare `python3`, so the SDK has to
+        # ship next to it or `import tandem` fails on the node.
         if sdk_path is not None:
             sdk_package = pathlib.Path(sdk_path) / sdk_import_name
             if sdk_package.is_dir():

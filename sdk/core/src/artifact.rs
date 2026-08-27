@@ -1,16 +1,9 @@
-//! The compiled output of the Tandem compile engine.
-//!
-//! No matter the source language, every backend hands back an `Artifact`: the
-//! WASM bytes plus enough metadata for the rest of Tandem to route, cache, and
-//! trust it.
+//! The compiled output of the engine: WASM bytes plus the metadata the rest of
+//! Tandem needs to route, cache, and trust them.
 
 use sha2::{Digest, Sha256};
 
 /// Which flavor of WASM binary we produced.
-///
-/// Tandem is moving from classic core modules (what the old py2wasm path
-/// emitted) to the newer component model, so the node needs to know which one
-/// it is looking at before it runs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
     /// A WebAssembly component (the wasip2 world). This is the new default.
@@ -62,8 +55,8 @@ impl Artifact {
     }
 }
 
-/// Compute the hex SHA-256 of some bytes. Shared by the artifact and the cache
-/// so a hash always means the same thing everywhere.
+/// Hex SHA-256, shared by the artifact and the cache so a hash always means
+/// the same thing.
 pub fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -71,8 +64,6 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
     hex_encode(&digest)
 }
 
-/// Turn a byte slice into a lowercase hex string. Small enough that we don't
-/// need a separate crate for it.
 fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

@@ -108,12 +108,9 @@ def compare_token(expected: str | None, provided: str | None) -> bool:
 
 
 def storage_root() -> pathlib.Path:
-    # Always return an ABSOLUTE path. Blob paths derived from here get stored and
-    # later handed to Flask's send_file(), which resolves a relative path against
-    # app.root_path (…/server/app) rather than the cwd -- so a relative
-    # TASK_STORAGE_ROOT (e.g. "runtime" from .env) makes send_file look in
-    # the wrong place and 500 with FileNotFoundError. Resolving a relative value
-    # against the server dir keeps storage independent of the process cwd.
+    # Always absolute: send_file() resolves a relative path against
+    # app.root_path, not the cwd, so a relative TASK_STORAGE_ROOT would make it
+    # look in the wrong place and 500 with FileNotFoundError.
     server_dir = pathlib.Path(current_app.root_path).resolve().parent
     configured = current_app.config.get("TASK_STORAGE_ROOT")
     if configured:
@@ -407,11 +404,9 @@ def create_task(
     iv = os.urandom(12)
     ciphertext = AESGCM(dek).encrypt(iv, payload, None)
 
-    # Wrap the DEK for EVERY node that has registered a public key, not just the
-    # one we happened to assign this task to. Failover can move a task to any
-    # healthy node, and each node can only unwrap a DEK that was encrypted to its
-    # own public key -- pinning the key to a single node meant every failover
-    # produced a job nobody could decrypt. One wrapped copy per node fixes that.
+    # Wrap the DEK for every node with a registered public key, not just the one
+    # assigned: failover can move the task anywhere, and a node can only unwrap a
+    # DEK encrypted to its own key.
     wrapped_any = False
     for node_key_row in NodePublicKey.query.all():
         try:
@@ -450,10 +445,8 @@ def create_task(
         # unwrap them.
         write_bytes(blob_path, ciphertext)
     else:
-        # Nobody has a registered public key, so an encrypted blob would be
-        # undecryptable by everyone. Store the payload as-is and let the node
-        # run it in the clear (the node treats a blob with no DEK header as
-        # plaintext).
+        # No registered public keys, so an encrypted blob would be readable by
+        # nobody. The node treats a blob with no DEK header as plaintext.
         logger.warning(
             "No registered node public keys – storing task %s payload unencrypted",
             tid,

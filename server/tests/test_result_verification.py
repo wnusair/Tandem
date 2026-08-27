@@ -104,8 +104,6 @@ class ResultVerificationTests(unittest.TestCase):
         )
         self.job_id = self.job["job_id"]
 
-    # ── Node plumbing ───────────────────────────────────────────────────────
-
     def _register_node(self) -> _Node:
         private_key, public_pem = _make_keypair()
         response = self.client.post(
@@ -144,8 +142,6 @@ class ResultVerificationTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         return tid
-
-    # ── Job plumbing ────────────────────────────────────────────────────────
 
     def _queue_task(self) -> list[str]:
         """Plan one task the way /start does, then create whatever came back."""
@@ -194,8 +190,6 @@ class ResultVerificationTests(unittest.TestCase):
         verify_group = task_queue.get_task(primary_tid)["verify_group"]
         self.assertTrue(verify_group)
         redis_client.zadd(verify.PENDING_GROUPS_KEY, {verify_group: 0})
-
-    # ── The checks ──────────────────────────────────────────────────────────
 
     def test_replicas_are_hidden_and_agreement_passes(self) -> None:
         tids = self._queue_task()

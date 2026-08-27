@@ -1,19 +1,9 @@
-//! The Tandem compile engine.
+//! The Tandem compile engine: source in, validated WASM artifact out.
 //!
-//! This crate is the shared brain behind every Tandem SDK. Each language (for
-//! now, Python) gets a thin wrapper that hands source to this engine, and the
-//! engine turns it into a validated WASM artifact a node can run. Keeping the
-//! hard part here means a new language is just a new backend, not a whole new
-//! pipeline.
-//!
-//! The pieces:
-//! * [`compile`] — the request/error types and the [`CompileBackend`] trait.
-//! * [`artifact`] — the compiled output and its content hash.
-//! * [`validate`] — cheap trust checks on WASM bytes.
-//! * [`cache`] — an on-disk cache so we compile the same thing only once.
-//!
-//! The front door most callers want is [`compile_with_cache`], which ties a
-//! backend, the cache, and validation together.
+//! Every language SDK is a thin wrapper over this crate, so adding a language
+//! means writing one [`CompileBackend`], not a new pipeline. The front door is
+//! [`compile_with_cache`], which ties a backend, the cache, and validation
+//! together.
 
 pub mod artifact;
 pub mod backends;
@@ -32,10 +22,8 @@ pub use validate::{detect_kind, validate_artifact};
 /// Compile a request, reusing the cache when we can and validating whatever the
 /// backend produces.
 ///
-/// This is the path most callers should use. It checks the cache first, only
-/// runs the (slow) backend on a miss, validates the result, and stores it for
-/// next time. The `source_hash` is supplied by the caller because how you hash
-/// a project depends on the language.
+/// `source_hash` comes from the caller because how you hash a project depends
+/// on the language.
 pub fn compile_with_cache(
     backend: &dyn CompileBackend,
     cache: &BuildCache,
@@ -44,12 +32,10 @@ pub fn compile_with_cache(
 ) -> Result<Artifact, CompileError> {
     let key = BuildCache::key_for(request, source_hash);
 
-    // A cache hit means we've built exactly this before, so hand it straight back.
     if let Some(hit) = cache.get(&key) {
         return Ok(hit);
     }
 
-    // No point running a backend that isn't installed; say so clearly instead.
     if !backend.is_available() {
         return Err(CompileError::BackendUnavailable(format!(
             "no working backend for language '{}'",
@@ -67,13 +53,10 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    // A minimal but valid-looking core module: the magic number plus version 1.
     fn fake_core_module() -> Vec<u8> {
         vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     }
 
-    // A minimal but valid-looking component: the magic number plus the
-    // component version/layer bytes.
     fn fake_component() -> Vec<u8> {
         vec![0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00]
     }
@@ -122,7 +105,6 @@ mod tests {
     #[test]
     fn cache_round_trips_an_artifact() {
         let dir = std::env::temp_dir().join("tandem_core_cache_round_trip");
-        // Start from a clean slate in case a previous run left something behind.
         let _ = std::fs::remove_dir_all(&dir);
 
         let cache = BuildCache::new(&dir);

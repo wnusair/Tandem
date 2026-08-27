@@ -67,10 +67,9 @@ def _require_node_auth():
     if not compare_token(node.get("node_token"), token):
         return None, None, (jsonify({"error": "Invalid node token"}), 403)
 
-    # Every node route comes through here, so this one check keeps a banned node
-    # away from claiming, downloading, reporting, and heartbeating alike. It has
-    # to live here rather than in the `nodes` set: a heartbeat re-adds the node
-    # to that set, so dropping it there on its own never stuck.
+    # Every node route comes through here, so one check covers claiming,
+    # downloading, reporting, and heartbeating. It can't live in the `nodes` set
+    # instead -- a heartbeat re-adds the node, so dropping it there never stuck.
     if receipts.is_node_banned(node_id):
         return None, None, (jsonify({"error": "Node is banned"}), 403)
 
@@ -302,10 +301,9 @@ def download_task_blob(tid: str, download_token: str):
         },
     )
 
-    # Serve the DEK copy wrapped to THIS node's key. Each node gets its own
-    # wrapped copy at task creation, so a task that failed over still has a key
-    # the current holder can unwrap. We don't delete it here -- the task might
-    # fail over again -- it's cleared when the task completes or fails.
+    # The DEK copy wrapped to THIS node's key, so a failed-over task still has a
+    # key its current holder can unwrap. Cleared when the task settles, not here,
+    # since it may fail over again.
     enc_key_row = TaskEncryptionKey.query.filter_by(
         tid=tid, target_node_id=node_id
     ).first()
@@ -373,11 +371,9 @@ def submit_task_result(tid: str):
         if not settle_result_once(tid, claim_token):
             return _duplicate_result_response(tid)
 
-        # Charge the API key's quota for the compute this task used. We bill the
-        # seconds the server watched it run, not the instruction_count the node
-        # signed for itself -- the node owns that key and could put any number
-        # there. Verification replicas are hidden copies the user never asked
-        # for, so we don't bill those against them at all.
+        # Bill the seconds the server watched, not the node-signed
+        # instruction_count, which a node could put any number in. Replicas are
+        # copies the user never asked for, so they aren't billed at all.
         if not task.get("verify_replica"):
             task_pid = task.get("pid", "")
             if task_pid:

@@ -3,7 +3,7 @@ use std::time::Duration;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use wasmtime::component::{Component, Linker as ComponentLinker, Val};
-use wasmtime::{Config, Engine, Linker, Module, Store};
+use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::preview1::WasiP1Ctx;
 use wasmtime_wasi::{
     HostMonotonicClock, HostWallClock, IoView, ResourceTable, WasiCtx, WasiCtxBuilder, WasiView,
@@ -23,6 +23,14 @@ pub struct ExecutionResult {
 
 /// Default fuel budget when no timeout is specified (1 billion units).
 const DEFAULT_FUEL: u64 = 1_000_000_000;
+
+/// Most linear memory one guest may hold. Fixed rather than scaled to the node's
+/// RAM: verification compares three nodes' results, so a limit that differed per
+/// node would let the same task succeed on one node and fail on another.
+const MAX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
+
+/// Most elements one guest table may hold, at 8 bytes apiece.
+const MAX_TABLE_ELEMENTS: usize = 1_000_000;
 
 /// The version/layer bytes that follow `\0asm` in a component, as opposed to
 /// `01 00 00 00` in a core module.
@@ -135,6 +143,27 @@ fn interpret_run_error(err: wasmtime::Error) -> Result<(), Box<dyn std::error::E
     Err(format!("WASM trap: {msg}").into())
 }
 
+/// The resource ceilings every guest store gets. Growing memory costs almost no
+/// fuel, so without these a module can grow until it takes the node down.
+///
+/// A refused grow comes back to the guest as -1, the way a failed allocation
+/// does, rather than as a trap.
+fn store_limits() -> StoreLimits {
+    StoreLimitsBuilder::new()
+        .memory_size(MAX_MEMORY_BYTES)
+        // A table costs 8 bytes an element, so leaving it uncapped is the same
+        // exhaustion through a different opcode.
+        .table_elements(MAX_TABLE_ELEMENTS)
+        .build()
+}
+
+/// The store state a core module runs against: its WASI context, plus the
+/// limits the store's limiter reads.
+struct CoreHost {
+    wasi: WasiP1Ctx,
+    limits: StoreLimits,
+}
+
 /// Run a classic core WASM module through WASI preview1: stdin in, stdout
 /// captured, no filesystem or sockets.
 fn run_core_module(
@@ -156,11 +185,17 @@ fn run_core_module(
         .stdout(stdout_buf.clone())
         .build_p1();
 
-    let mut store = Store::new(&engine, wasi_ctx);
-    store.set_fuel(fuel_budget)?;
+    let host = CoreHost {
+        wasi: wasi_ctx,
+        limits: store_limits(),
+    };
 
-    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
-    wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |ctx| ctx)?;
+    let mut store = Store::new(&engine, host);
+    store.set_fuel(fuel_budget)?;
+    store.limiter(|host| &mut host.limits);
+
+    let mut linker: Linker<CoreHost> = Linker::new(&engine);
+    wasmtime_wasi::preview1::add_to_linker_sync(&mut linker, |host| &mut host.wasi)?;
 
     let instance = linker.instantiate(&mut store, &module)?;
 
@@ -199,6 +234,7 @@ fn run_core_module(
 struct ComponentHost {
     ctx: WasiCtx,
     table: ResourceTable,
+    limits: StoreLimits,
 }
 
 impl IoView for ComponentHost {
@@ -238,9 +274,11 @@ fn run_component(
     let host = ComponentHost {
         ctx,
         table: ResourceTable::new(),
+        limits: store_limits(),
     };
     let mut store = Store::new(&engine, host);
     store.set_fuel(fuel_budget)?;
+    store.limiter(|host| &mut host.limits);
 
     let mut linker: ComponentLinker<ComponentHost> = ComponentLinker::new(&engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker)?;
@@ -318,6 +356,32 @@ mod tests {
             (drop (call $clock_time_get (i32.const 0) (i64.const 0) (i32.const 64)))))
     "#;
 
+    // Declares 512 MiB of memory up front, so the cap turns it away at
+    // instantiation rather than at a grow.
+    const OVERSIZED_MEMORY: &str = r#"
+        (module
+          (memory (export "memory") 8192)
+          (func (export "_start")))
+    "#;
+
+    // Asks for 512 MiB one page at a time, and traps if the grow was granted.
+    const MEMORY_BOMB: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "_start")
+            (if (i32.ne (memory.grow (i32.const 8192)) (i32.const -1))
+              (then (unreachable)))))
+    "#;
+
+    // Grows well inside the cap, and traps if even that was refused.
+    const MODEST_GROWTH: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "_start")
+            (if (i32.eq (memory.grow (i32.const 16)) (i32.const -1))
+              (then (unreachable)))))
+    "#;
+
     // "TNDM" magic, little-endian wasm length, the wasm, then the input.
     fn frame(wasm: &[u8], input: &[u8]) -> Vec<u8> {
         let mut payload = Vec::new();
@@ -363,5 +427,20 @@ mod tests {
         // split would compute with the same numbers.
         let other = execute_wasm(&frame(&probe, b"other input"), None).expect("probe should run");
         assert_ne!(first.memory_hash, other.memory_hash);
+    }
+
+    #[test]
+    fn caps_the_memory_a_guest_can_take() {
+        let oversized = wat::parse_str(OVERSIZED_MEMORY).expect("probe should assemble");
+        assert!(
+            execute_wasm(&frame(&oversized, b""), None).is_err(),
+            "a module declaring more memory than the cap should be turned away"
+        );
+
+        let bomb = wat::parse_str(MEMORY_BOMB).expect("probe should assemble");
+        execute_wasm(&frame(&bomb, b""), None).expect("the grow past the cap should be refused");
+
+        let modest = wat::parse_str(MODEST_GROWTH).expect("probe should assemble");
+        execute_wasm(&frame(&modest, b""), None).expect("a grow inside the cap should be allowed");
     }
 }
